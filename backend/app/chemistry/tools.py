@@ -183,39 +183,52 @@ class ChemistryTools:
 
             try:
                 # We want to preserve the layout of 'current_mol' as much as possible.
-                # However, rw_mol now has extra atoms.
-                # We can try to align rw_mol to current_mol.
-                # If that fails, we fall back to full re-layout (but that causes the "huge size" issue if defaults differ).
-
-                # Note: GenerateDepictionMatching2DStructure requires the reference to be a substructure of the new mol.
-                # Since we just added something, current_mol IS a substructure of rw_mol (mostly).
-                # But we removed an H, so strictly it might not be a perfect substructure if we search by exact graph.
-                # But let's try.
-
-                # Alternatively, we just let align_and_diff handle it later?
-                # But the agent returns 'new_mol' immediately for next steps.
-                # If we return it with (0,0,0) for new atoms, next steps might fail or image generation might look bad.
-
-                # Let's try to generate coords for the new atoms using ConstrainedEmbed? No, that's 3D.
-
-                # Best approach for 2D addition:
-                # 1. Compute 2D coords for the fragment (centered at origin).
-                # 2. Translate fragment so attachment point matches anchor atom position + offset.
-                # 3. Use those coords.
-
-                # However, implementing that manually in RDKit requires accessing Conformer.
+                # GenerateDepictionMatching2DStructure works best when the template has standard bond lengths (~1.5A).
+                # If 'current_mol' is scaled (e.g. from UI), the new atoms will be generated at standard size,
+                # creating a distortion. We need to normalize scale first.
 
                 if rw_mol.GetNumConformers() == 0:
                      AllChem.Compute2DCoords(rw_mol)
                 else:
-                    # If we have a conformer, we should update it.
-                    # This is tricky without a full constrained generation.
-                    # For now, let's use GenerateDepictionMatching2DStructure which is designed for this.
-                    # We use the original 'current_mol' as the template.
-
-                    # We need to ensure current_mol has a conformer (it should).
                     if current_mol.GetNumConformers() > 0:
-                         AllChem.GenerateDepictionMatching2DStructure(rw_mol, current_mol, acceptFailure=True)
+                        # 1. Calculate scale factor
+                        total_len = 0.0
+                        count = 0
+                        conf = current_mol.GetConformer()
+                        for bond in current_mol.GetBonds():
+                            u = bond.GetBeginAtomIdx()
+                            v = bond.GetEndAtomIdx()
+                            p1 = conf.GetAtomPosition(u)
+                            p2 = conf.GetAtomPosition(v)
+                            dist = ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
+                            total_len += dist
+                            count += 1
+
+                        avg_len = total_len / count if count > 0 else 1.5
+                        scale_factor = avg_len / 1.5
+
+                        # 2. Normalize template if needed
+                        # Threshold: if scale is off by more than 10%
+                        if abs(scale_factor - 1.0) > 0.1:
+                            template_mol = Chem.Mol(current_mol)
+                            template_conf = template_mol.GetConformer()
+                            norm_scale = 1.0 / scale_factor
+                            for i in range(template_mol.GetNumAtoms()):
+                                pos = template_conf.GetAtomPosition(i)
+                                template_conf.SetAtomPosition(i, (pos.x * norm_scale, pos.y * norm_scale, pos.z * norm_scale))
+
+                            # Generate coords using normalized template.
+                            # The new atoms will be generated at standard size (~1.5), which matches the template now.
+                            AllChem.GenerateDepictionMatching2DStructure(rw_mol, template_mol, acceptFailure=True)
+
+                            # 3. Scale result back to original size
+                            rw_conf = rw_mol.GetConformer()
+                            for i in range(rw_mol.GetNumAtoms()):
+                                pos = rw_conf.GetAtomPosition(i)
+                                rw_conf.SetAtomPosition(i, (pos.x * scale_factor, pos.y * scale_factor, pos.z * scale_factor))
+                        else:
+                            # Standard scale, proceed as usual
+                            AllChem.GenerateDepictionMatching2DStructure(rw_mol, current_mol, acceptFailure=True)
                     else:
                          AllChem.Compute2DCoords(rw_mol)
 
