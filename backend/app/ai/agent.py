@@ -1,46 +1,103 @@
+"""
+AI Agent for molecule editing.
+Simplified for capable LLMs (Gemini 3.0 Flash, Claude 3.5, etc.)
+"""
+
 import os
 import json
-import re
-import ast
 import base64
 from io import BytesIO
 from openai import OpenAI
 from app.models import EditRequest, VisualMolecule
 from app.chemistry.molecule import VisualMoleculeBuilder, align_and_diff
 from app.chemistry.tools import ChemistryTools
+from app.chemistry.substructures import get_available_patterns, search_patterns
 from rdkit import Chem
 from rdkit.Chem import Draw, AllChem
 
-# Configure OpenRouter inside function to pick up env vars dynamically
+# ==================== TOOL SCHEMA ====================
 
 TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
-            "name": "modify_atom",
-            "description": "Change an atom's element (e.g. Carbon to Nitrogen).",
+            "name": "find_substructure",
+            "description": "Find all occurrences of a named substructure in the molecule. Use this before replacing a group.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "atom_id": { "type": "integer", "description": "The ID of the atom to change." },
-                    "new_element_symbol": { "type": "string", "description": "Periodic table symbol (e.g., 'N', 'O', 'Cl')." }
+                    "pattern_name": {
+                        "type": "string",
+                        "description": "Name of the substructure (e.g., 'phenyl', 'benzimidazole', 'pyridine')."
+                    }
                 },
-                "required": ["atom_id", "new_element_symbol"]
+                "required": ["pattern_name"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "replace_atoms",
-            "description": "Replace multiple atoms with a new element.",
+            "name": "search_patterns",
+            "description": "Search for available substructure pattern names. Use when unsure of exact name.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "atom_ids": { "type": "array", "items": { "type": "integer" }, "description": "List of atom IDs to replace." },
-                    "new_element_symbol": { "type": "string", "description": "Periodic table symbol." }
+                    "query": {
+                        "type": "string",
+                        "description": "Search term (e.g., 'pyrid' to find pyridine, pyrimidine, etc.)."
+                    }
                 },
-                "required": ["atom_ids", "new_element_symbol"]
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "modify_atom",
+            "description": "Change an atom's element.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "atom_id": {"type": "integer", "description": "Atom ID to modify."},
+                    "new_element": {"type": "string", "description": "New element symbol (e.g., 'N', 'O', 'S')."}
+                },
+                "required": ["atom_id", "new_element"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_substructure",
+            "description": "Add a fragment to an anchor atom.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "anchor_atom_id": {"type": "integer", "description": "Atom ID to attach to."},
+                    "fragment": {"type": "string", "description": "Fragment name (e.g., 'phenyl', 'methyl') or SMILES."}
+                },
+                "required": ["anchor_atom_id", "fragment"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "replace_substructure",
+            "description": "Replace atoms with a new fragment.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "atom_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Atom IDs to replace."
+                    },
+                    "fragment": {"type": "string", "description": "New fragment name or SMILES."}
+                },
+                "required": ["atom_ids", "fragment"]
             }
         }
     },
@@ -52,7 +109,11 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "atom_ids": { "type": "array", "items": { "type": "integer" }, "description": "List of atom IDs to remove." }
+                    "atom_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Atom IDs to remove."
+                    }
                 },
                 "required": ["atom_ids"]
             }
@@ -61,221 +122,230 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
-            "name": "add_substructure",
-            "description": "Add a functional group or fragment to a specific anchor atom.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "anchor_atom_id": { "type": "integer", "description": "The atom to attach to." },
-                    "smiles_fragment": { "type": "string", "description": "Valid RDKit SMILES fragment." }
-                },
-                "required": ["anchor_atom_id", "smiles_fragment"]
-            }
+            "name": "aromatize",
+            "description": "Convert molecule to aromatic representation.",
+            "parameters": {"type": "object", "properties": {}}
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "replace_substructure",
-            "description": "Replace a set of atoms with a new substructure.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "atom_ids": { "type": "array", "items": { "type": "integer" }, "description": "Atoms to be replaced." },
-                    "smiles_fragment": { "type": "string", "description": "Valid RDKit SMILES fragment." }
-                },
-                "required": ["atom_ids", "smiles_fragment"]
-            }
+            "name": "dearomatize",
+            "description": "Convert molecule to Kekulé form (explicit single/double bonds).",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_properties",
+            "description": "Calculate molecular properties (MW, formula, LogP, etc.).",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_structure",
+            "description": "Validate the molecule for chemical errors.",
+            "parameters": {"type": "object", "properties": {}}
         }
     }
 ]
 
-SYSTEM_PROMPT = """
-You are a master organic chemist and molecular editor AI. 
-Your goal is to modify chemical structures based on natural language requests.
+# ==================== SYSTEM PROMPT ====================
 
-Available tools:
-- modify_atom(atom_id, new_element_symbol)
-- replace_atoms(atom_ids, new_element_symbol)
-- remove_atoms(atom_ids)
-- add_substructure(anchor_atom_id, smiles_fragment)
-- replace_substructure(atom_ids, smiles_fragment)
+SYSTEM_PROMPT = """You are a molecular editor AI. Modify molecules using the provided tools.
 
-Guidelines:
-1. You will be provided with:
-    - A Mapped SMILES representation of the current molecule where atoms are noted as [Element:Index].
-    - A set of 'Selected Indices' from the user.
-    - An image of the molecule with atom indices labeled as 'SymbolINDEX' (e.g., C4, N10).
-2. Use the image and mapped SMILES together to confirm which atom_ids correspond to the user's request.
-3. Only use the provided tools.
-4. Ensure SMILES fragments are chemically valid and use explicit parentheses for branching:
-   - Methyl: 'C'
-   - Trifluoromethyl: 'C(F)(F)F' (NOT 'CF3' - numbers indicate rings)
-   - Do not use abbreviations like 'Ph', 'Me'. Use explicit SMILES.
-5. The indices in the mapped SMILES and image correspond to the atom_ids you should use in tool calls.
+## Workflow
+1. **To replace a substructure**: First use `find_substructure` to get atom IDs, then use `replace_substructure`.
+2. **To add a group**: Use `add_substructure` with the anchor atom ID (from user selection or image).
+3. **To modify atoms**: Use `modify_atom` or `remove_atoms`.
+
+## Context Provided
+- **Mapped SMILES**: Atoms labeled as [Element:ID] (e.g., [C:5], [N:12]).
+- **Image**: Atoms labeled as "SymbolID" (e.g., C5, N12).
+- **Selected Indices**: Atoms the user has selected in the editor.
+
+## Fragment Names
+Common fragments: phenyl, pyridine, pyrimidine, furan, thiophene, imidazole, benzimidazole, 
+piperidine, piperazine, morpholine, trifluoromethyl, methoxy, cyano, isopropyl, tert_butyl.
+
+Use `search_patterns` if unsure of exact name.
+
+## Rules
+- Use atom IDs from the SMILES mapping or image labels.
+- For raw SMILES fragments, use proper notation: C(F)(F)F for trifluoromethyl, c1ccccc1 for benzene.
 """
 
+
 def generate_molecule_image(mol: Chem.Mol) -> str:
-    """Generates a base64 encoded PNG of the molecule with indices."""
+    """Generates a base64 encoded PNG of the molecule with atom indices."""
     try:
         mol = Chem.Mol(mol)
         AllChem.Compute2DCoords(mol)
 
-        # Add atom indices to labels
         for atom in mol.GetAtoms():
-            atom.SetProp('atomLabel', f"{atom.GetSymbol()}{atom.GetIdx()}")
+            label = f"{atom.GetSymbol()}{atom.GetIdx()}"
+            atom.SetProp("atomNote", label)
 
-        img = Draw.MolToImage(mol, size=(600, 600))
-        buffered = BytesIO()
-        img.save(buffered, format="PNG")
-        return base64.b64encode(buffered.getvalue()).decode("utf-8")
+        drawer = Draw.MolDraw2DCairo(600, 500)
+        opts = drawer.drawOptions()
+        opts.addAtomIndices = False
+        opts.addStereoAnnotation = True
+        drawer.DrawMolecule(mol)
+        drawer.FinishDrawing()
+
+        img_bytes = drawer.GetDrawingText()
+        return base64.b64encode(img_bytes).decode("utf-8")
     except Exception as e:
-        print(f"Error generating image: {e}")
+        print(f"Image generation failed: {e}")
         return ""
+
 
 async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
     """
-    Orchestrates the AI editing process.
+    Main entry point for AI-powered molecule editing.
     """
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        print("Warning: OPENROUTER_API_KEY not found.")
-    
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=api_key or "sk-or-placeholder",
+        api_key=os.getenv("OPENROUTER_API_KEY")
     )
 
-    # 1. Reconstruct RDKit Mol from JSON
-    current_mol = VisualMoleculeBuilder.visual_json_to_mol(request.current_molecule)
-    
-    # Generate Context
-    mapped_smiles = ChemistryTools.get_mapped_smiles(current_mol)
-    image_b64 = generate_molecule_image(current_mol)
+    # Get current molecule from request
+    mol_block = request.current_molecule.mol_block
+    if not mol_block:
+        raise ValueError("No mol_block provided in request")
 
-    # 2. Call AI
+    current_mol = Chem.MolFromMolBlock(mol_block)
+    if not current_mol:
+        raise ValueError("Failed to parse mol_block")
+
+    # Generate context
+    mapped_smiles = ChemistryTools.get_mapped_smiles(current_mol)
+    mol_image = generate_molecule_image(current_mol)
+
+    # Build messages
     user_content = [
-        {
-            "type": "text", 
-            "text": f"Current Molecule (Mapped SMILES): {mapped_smiles}\nSelection Indices: {request.selected_indices}\n\nUser Request: \"{request.user_prompt}\""
-        }
+        {"type": "text", "text": f"**Mapped SMILES**: {mapped_smiles}"},
+        {"type": "text", "text": f"**Selected Indices**: {request.selected_indices}"},
+        {"type": "text", "text": f"**User Request**: {request.user_prompt}"},
     ]
-    
-    if image_b64:
+
+    if mol_image:
         user_content.append({
             "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{image_b64}"
-            }
+            "image_url": {"url": f"data:image/png;base64,{mol_image}"}
         })
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content}
     ]
-    
-    try:
+
+    # Run agent loop
+    new_mol = current_mol
+    has_modified = False
+    max_turns = 5
+
+    for turn in range(max_turns):
         response = client.chat.completions.create(
-            model="google/gemma-3-27b-it:free",
+            model="google/gemini-3-flash-preview",
             messages=messages,
             tools=TOOLS_SCHEMA,
-            tool_choice="auto"
+            tool_choice="auto",
+            max_tokens=2048  # Limit to prevent credit exhaustion
         )
+
+        ai_msg = response.choices[0].message
+        messages.append(ai_msg)
+
+        tool_calls = ai_msg.tool_calls or []
         
-        message = response.choices[0].message
-        print(f"AI Response: {message}")
-        
-        # 3. Handle Tool Calls
-        new_mol = current_mol
-        
-        tool_calls = message.tool_calls or []
-        
-        # Fallback for text-based tool calls (Gemma/Free models)
-        if not tool_calls and message.content:
-            # Clean up content for parsing
-            clean_content = message.content.strip()
-            # Remove markdown code blocks if present
-            clean_content = re.sub(r"^```python\s*|\s*```$", "", clean_content, flags=re.MULTILINE)
-            # Ensure it looks like a list or a series of calls
-            if not clean_content.startswith("["):
-                clean_content = f"[{clean_content}]"
-            
+        if not tool_calls:
+            # No more tool calls, exit loop
+            break
+
+        print(f"Turn {turn}: {len(tool_calls)} tool call(s)")
+
+        for tool_call in tool_calls:
+            fn_name = tool_call.function.name
+            args = json.loads(tool_call.function.arguments)
+            result = ""
+
             try:
-                tree = ast.parse(clean_content)
-                if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.List):
-                    for node in tree.body[0].value.elts:
-                        if isinstance(node, ast.Call):
-                            fn_name = node.func.id
-                            # Extract keyword arguments
-                            args = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords}
-                            
-                            class PseudoToolCall:
-                                class Function:
-                                    def __init__(self, n, a):
-                                        self.name = n
-                                        self.arguments = json.dumps(a)
-                                def __init__(self, n, a):
-                                    self.function = self.Function(n, a)
-                            tool_calls.append(PseudoToolCall(fn_name, args))
-            except Exception as e:
-                print(f"Fallback parse error: {e}. Content was: {clean_content}")
+                if fn_name == "find_substructure":
+                    matches = ChemistryTools.find_substructure(new_mol, args["pattern_name"])
+                    result = json.dumps({"matches": matches, "count": len(matches)})
 
-        if tool_calls:
-            print(f"Tool calls found: {len(tool_calls)}")
-            for tool_call in tool_calls:
-                fn_name = tool_call.function.name
-                args = json.loads(tool_call.function.arguments)
-                
-                print(f"Executing {fn_name} with {args}")
-                
-                if fn_name == "modify_atom":
-                    new_mol = ChemistryTools.modify_atom(
-                        new_mol, 
-                        args["atom_id"], 
-                        args["new_element_symbol"]
-                    )
-                elif fn_name == "replace_atoms":
-                    new_mol = ChemistryTools.replace_atoms(
-                        new_mol,
-                        args["atom_ids"],
-                        args["new_element_symbol"]
-                    )
-                elif fn_name == "remove_atoms":
-                    new_mol = ChemistryTools.remove_atoms(
-                        new_mol,
-                        args["atom_ids"]
-                    )
+                elif fn_name == "search_patterns":
+                    patterns = search_patterns(args["query"])
+                    result = json.dumps({"patterns": patterns})
+
+                elif fn_name == "modify_atom":
+                    new_mol = ChemistryTools.modify_atom(new_mol, args["atom_id"], args["new_element"])
+                    has_modified = True
+                    result = "Success: Atom modified."
+
                 elif fn_name == "add_substructure":
-                    new_mol = ChemistryTools.add_substructure(
-                        new_mol, 
-                        args["anchor_atom_id"], 
-                        args["smiles_fragment"]
-                    )
+                    new_mol = ChemistryTools.add_substructure(new_mol, args["anchor_atom_id"], args["fragment"])
+                    has_modified = True
+                    result = "Success: Fragment added."
+
                 elif fn_name == "replace_substructure":
-                    new_mol = ChemistryTools.replace_substructure(
-                        new_mol,
-                        args["atom_ids"],
-                        args["smiles_fragment"]
-                    )
-        
-        # 4. Alignment & Diff
-        aligned_vis = align_and_diff(current_mol, new_mol)
-        
-        # 5. Apply Diff Metadata
-        final_vis = ChemistryTools.apply_diff_metadata(current_mol, new_mol, aligned_vis)
-        
-        # Check if any changes were made
-        has_changes = any(a.diff_state != "EXISTING" for a in final_vis.atoms) or \
-                      any(b.diff_state != "EXISTING" for b in final_vis.bonds)
-        
-        if not has_changes:
-            raise Exception("No changes proposed by AI.")
+                    new_mol = ChemistryTools.replace_substructure(new_mol, args["atom_ids"], args["fragment"])
+                    has_modified = True
+                    result = "Success: Substructure replaced."
 
-        return final_vis
+                elif fn_name == "remove_atoms":
+                    new_mol = ChemistryTools.remove_atoms(new_mol, args["atom_ids"])
+                    has_modified = True
+                    result = "Success: Atoms removed."
 
-    except Exception as e:
-        print(f"AI Error: {e}")
-        # If it's our direct "No changes" error, re-raise to bubble up
-        if "No changes proposed" in str(e):
-            raise e
-        return request.current_molecule
+                elif fn_name == "aromatize":
+                    new_mol = ChemistryTools.aromatize(new_mol)
+                    has_modified = True
+                    result = "Success: Aromatized."
+
+                elif fn_name == "dearomatize":
+                    new_mol = ChemistryTools.dearomatize(new_mol)
+                    has_modified = True
+                    result = "Success: Dearomatized."
+
+                elif fn_name == "calculate_properties":
+                    props = ChemistryTools.calculate_properties(new_mol)
+                    result = json.dumps(props)
+
+                elif fn_name == "check_structure":
+                    check = ChemistryTools.check_structure(new_mol)
+                    result = json.dumps(check)
+
+                else:
+                    result = f"Error: Unknown function {fn_name}"
+
+            except Exception as e:
+                result = f"Error: {str(e)}"
+                print(f"Tool {fn_name} failed: {e}")
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": fn_name,
+                "content": result
+            })
+
+    # Finalize
+    if not has_modified:
+        raise Exception("No changes proposed by AI.")
+
+    aligned_vis = align_and_diff(current_mol, new_mol)
+    final_vis = ChemistryTools.apply_diff_metadata(current_mol, new_mol, aligned_vis)
+
+    # Verify changes
+    has_changes = any(a.diff_state != "EXISTING" for a in final_vis.atoms) or \
+                  any(b.diff_state != "EXISTING" for b in final_vis.bonds)
+
+    if not has_changes:
+        raise Exception("No visible changes in molecule.")
+
+    return final_vis

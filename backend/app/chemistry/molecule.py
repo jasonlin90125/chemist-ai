@@ -116,9 +116,11 @@ def align_and_diff(original_mol: Chem.Mol, new_mol: Chem.Mol) -> VisualMolecule:
     if mcs.numAtoms > 0:
         try:
             # 2. Try partial structure alignment
-            AllChem.GenerateDepictionMatching2DStructure(new_mol, original_mol)
+            # Important: We want to preserve the coordinate system of the original molecule
+            AllChem.GenerateDepictionMatching2DStructure(new_mol, original_mol, acceptFailure=True)
         except Exception:
             # 3. Fallback: Index-based coordinate mapping
+            # This is risky if indices shifted significantly, but better than full reset
             coordMap = {}
             conf = original_mol.GetConformer()
             from rdkit.Geometry import Point2D
@@ -128,6 +130,7 @@ def align_and_diff(original_mol: Chem.Mol, new_mol: Chem.Mol) -> VisualMolecule:
             AllChem.Compute2DCoords(new_mol, coordMap=coordMap)
     else:
         # Fallback if no common substructure
+        # This will reset scale, but it's unavoidable if there's no overlap
         AllChem.Compute2DCoords(new_mol)
 
     # 3. Compute Diff States

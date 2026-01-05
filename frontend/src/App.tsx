@@ -21,9 +21,11 @@ function App() {
         loadInitial();
     }, []);
 
-    const handleSendPrompt = (prompt: string) => {
+    const handleSendPrompt = async (prompt: string) => {
         const selectedIds = ketcherRef.current?.getSelectedAtoms() || [];
-        requestEdit(prompt, selectedIds);
+        // Get live molecule from Ketcher to ensure we're editing what's displayed
+        const liveMolfile = await ketcherRef.current?.getMolfile();
+        requestEdit(prompt, selectedIds, liveMolfile);
     };
 
     return (

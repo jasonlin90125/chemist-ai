@@ -25,8 +25,7 @@ export const useMolecule = () => {
         setSelectedIndices(indices);
     };
 
-
-    const requestEdit = async (prompt: string, manualIndices?: number[]) => {
+    const requestEdit = async (prompt: string, manualIndices?: number[], liveMolfile?: string | null) => {
         if (!molecule) return;
 
         setStatus("LOADING");
@@ -35,8 +34,13 @@ export const useMolecule = () => {
         setOriginalMolecule(molecule);
 
         try {
+            // Use live molfile from Ketcher if provided, otherwise fall back to state
+            const currentMolecule: VisualMolecule = liveMolfile
+                ? { ...molecule, mol_block: liveMolfile }
+                : molecule;
+
             const proposal = await moleculeApi.edit({
-                current_molecule: molecule,
+                current_molecule: currentMolecule,
                 user_prompt: prompt,
                 selected_indices: manualIndices || selectedIndices
             });

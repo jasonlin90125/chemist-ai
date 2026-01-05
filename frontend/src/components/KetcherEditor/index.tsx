@@ -19,6 +19,7 @@ interface Ketcher {
 
 export interface KetcherEditorRef {
     getSelectedAtoms: () => number[];
+    getMolfile: () => Promise<string | null>;
 }
 
 interface KetcherEditorProps {
@@ -37,6 +38,15 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
                 if (!ketcherRef.current) return [];
                 const selection = ketcherRef.current.editor.selection();
                 return selection?.atoms || [];
+            },
+            getMolfile: async () => {
+                if (!ketcherRef.current) return null;
+                try {
+                    return await ketcherRef.current.getMolfile();
+                } catch (e) {
+                    console.error("Failed to get molfile:", e);
+                    return null;
+                }
             }
         }));
 
