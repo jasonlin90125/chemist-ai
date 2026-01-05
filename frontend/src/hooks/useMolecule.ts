@@ -19,50 +19,6 @@ export const useMolecule = () => {
         }
     };
 
-    const handleSelection = (indices: number[]) => {
-        // If we are in diffing mode, block selection
-        if (status === 'DIFFING') return;
-
-        // Toggle logic
-        setSelectedIndices(prev => {
-            // For simple single select or toggle:
-            // If clicked is in list, remove it. Else add it.
-            const clicked = indices[0]; // Assuming single click for now from canvas
-            if (prev.includes(clicked)) {
-                return prev.filter(i => i !== clicked);
-            }
-            return [...prev, clicked];
-        });
-
-        // Update UI state in molecule object for visual feedback
-        if (molecule) {
-            const newAtoms = molecule.atoms.map(a => ({
-                ...a,
-                ui_state: (selectedIndices.includes(a.id) || indices.includes(a.id)) && !(selectedIndices.includes(a.id) && indices.includes(a.id))
-                    ? "SELECTED"
-                    : "DEFAULT"
-                // Logic above is flawed for toggle, let's simplify:
-                // We'll re-render based on the new 'selectedIndices' inside the component or here.
-                // Better: keep molecule pure data, let canvas derive selection visuals? 
-                // Current implementation expects 'ui_state' in data. So we must map it.
-            } as const));
-
-            // We need to wait for the state update to settle to map correctly, 
-            // but for now let's just cheat and assume we are adding.
-            // A better way is to derived the visual molecule from base + selection state.
-            // For MVP, let's just trust the backend resets states or we handle it on prompt send.
-
-            setMolecule({ ...molecule, atoms: newAtoms });
-        }
-    };
-
-    // Correction: The handleSelection logic above is messy. 
-    // Let's rely on re-mapping the molecule whenever selectedIndices changes.
-    // We'll do this in a useEffect inside the hook or just return a derived molecule.
-    // For simplicity, let's just keep track of indices and let the UI render them as selected.
-    // But our AtomNode expects `data.ui_state`. 
-    // Let's update `molecule` state when `selectedIndices` changes.
-
     const updateSelectionState = (indices: number[]) => {
         setSelectedIndices(indices);
         if (molecule) {
@@ -77,7 +33,7 @@ export const useMolecule = () => {
     };
 
 
-    const requestEdit = async (prompt: string) => {
+    const requestEdit = async (prompt: string, manualIndices?: number[]) => {
         if (!molecule) return;
 
         setStatus("LOADING");
@@ -88,7 +44,7 @@ export const useMolecule = () => {
             const proposal = await moleculeApi.edit({
                 current_molecule: molecule,
                 user_prompt: prompt,
-                selected_indices: selectedIndices
+                selected_indices: manualIndices || selectedIndices
             });
 
             setMolecule(proposal);

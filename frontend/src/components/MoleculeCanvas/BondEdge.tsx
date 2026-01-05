@@ -1,87 +1,60 @@
-import { BaseEdge, EdgeLabelRenderer, EdgeProps, getStraightPath } from '@xyflow/react';
-import clsx from 'clsx';
+import { BaseEdge, EdgeProps, getBezierPath } from '@xyflow/react';
 import { Bond } from '../../types/molecule';
 
 export const BondEdge = ({
-    id,
     sourceX,
     sourceY,
     targetX,
     targetY,
     data,
     markerEnd,
-}: EdgeProps<Bond>) => {
-    const [edgePath, labelX, labelY] = getStraightPath({
+    style
+}: EdgeProps) => {
+    // We removed 'id', 'labelX', 'labelY', 'EdgeLabelRenderer', 'clsx' to fix unused var errors
+    // We added 'style' to satisfy EdgeProps requirement (though we override it)
+
+    const [edgePath] = getBezierPath({
         sourceX,
         sourceY,
         targetX,
         targetY,
     });
 
-    const diffState = data?.diff_state || 'EXISTING';
-    let strokeColor = '#64748B'; // Muted slate
+    // Handle data type safely
+    const bondData = data as unknown as Bond | undefined;
+    const diff_state = bondData?.diff_state || 'EXISTING';
+    const order = bondData?.order || 'SINGLE';
+
+    let strokeColor = '#4B5563'; // gray-600
     let strokeWidth = 2;
+    let strokeDasharray = undefined;
 
-    if (diffState === 'ADDED') {
-        strokeColor = '#22C55E';
+    if (diff_state === 'ADDED') {
+        strokeColor = '#10B981'; // green-500
         strokeWidth = 3;
-    } else if (diffState === 'REMOVED') {
-        strokeColor = '#EF4444';
-        strokeWidth = 3;
-        // Dashed for removed?
+    } else if (diff_state === 'REMOVED') {
+        strokeColor = '#EF4444'; // red-500
+        strokeDasharray = '5,5';
     }
 
-    // Bond Visualization Logic
-    // Bond Visualization Logic
-    const isDouble = data?.order === 'DOUBLE';
-    const isTriple = data?.order === 'TRIPLE';
-
-    // Calculate normal vector for offsets
-    const dx = targetX - sourceX;
-    const dy = targetY - sourceY;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    // Unit normal vector
-    const nx = len ? -dy / len : 0;
-    const ny = len ? dx / len : 0;
-
-    const OFFSET = 4; // Increased from 2.5 to 4 for better visibility
-
-    // Helper to generate offset path
-    const getOffsetPath = (offset: number) => {
-        return `M ${sourceX + nx * offset} ${sourceY + ny * offset} L ${targetX + nx * offset} ${targetY + ny * offset}`;
-    };
-
-    const baseStyle = {
-        stroke: strokeColor,
-        strokeWidth: 2,
-        opacity: diffState === 'REMOVED' ? 0.3 : 1
-    };
-
-    if (isDouble) {
-        return (
-            <g>
-                <path d={getOffsetPath(OFFSET)} style={baseStyle} fill="none" />
-                <path d={getOffsetPath(-OFFSET)} style={baseStyle} fill="none" />
-            </g>
-        );
+    // Double bond styling simulation
+    if (order === 'DOUBLE') {
+        strokeWidth = 4;
+    } else if (order === 'TRIPLE') {
+        strokeWidth = 6;
     }
 
-    if (isTriple) {
-        return (
-            <g>
-                <path d={edgePath} style={baseStyle} fill="none" />
-                <path d={getOffsetPath(OFFSET * 1.5)} style={baseStyle} fill="none" />
-                <path d={getOffsetPath(-OFFSET * 1.5)} style={baseStyle} fill="none" />
-            </g>
-        );
-    }
-
-    // Default Single
     return (
         <BaseEdge
             path={edgePath}
             markerEnd={markerEnd}
-            style={{ ...baseStyle, strokeWidth: diffState === 'ADDED' ? 3 : 2 }}
+            style={{
+                ...style, // preserve incoming style (selection etc) but override colors
+                stroke: strokeColor,
+                strokeWidth,
+                strokeDasharray,
+                opacity: diff_state === 'REMOVED' ? 0.5 : 1
+            }}
         />
     );
 };

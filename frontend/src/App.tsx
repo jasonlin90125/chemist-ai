@@ -19,6 +19,17 @@ function App() {
         loadInitial();
     }, []);
 
+    const handleManualEdit = (action: string, selectedIds: number[]) => {
+        if (status === 'LOADING' || status === 'DIFFING') return;
+
+        if (action === 'delete') {
+            requestEdit(`Delete atoms ${selectedIds.join(', ')}`, selectedIds);
+        } else if (action.startsWith('replace:')) {
+            const element = action.split(':')[1];
+            requestEdit(`Replace atoms ${selectedIds.join(', ')} with ${element}`, selectedIds);
+        }
+    };
+
     return (
         <div className="w-full h-screen bg-chemist-bg relative overflow-hidden">
 
@@ -26,6 +37,7 @@ function App() {
             <MoleculeCanvas
                 molecule={molecule}
                 onSelectionChange={handleSelection}
+                onManualEdit={handleManualEdit}
             />
 
             {/* UI Overlay */}
