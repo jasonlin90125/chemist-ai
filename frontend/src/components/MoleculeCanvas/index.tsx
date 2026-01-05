@@ -8,7 +8,9 @@ import {
     useNodesState,
     useEdgesState,
     NodeTypes,
-    EdgeTypes
+    EdgeTypes,
+    OnSelectionChangeParams,
+    SelectionMode
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -27,30 +29,39 @@ const edgeTypes: EdgeTypes = {
 interface MoleculeCanvasProps {
     molecule: VisualMolecule | null;
     onSelectionChange: (selectedIds: number[]) => void;
+    // We might need a callback to trigger edits directly from shortcuts
+    onManualEdit?: (action: string, selectedIds: number[]) => void;
 }
 
-export const MoleculeCanvas = ({ molecule, onSelectionChange }: MoleculeCanvasProps) => {
-    const [nodes, setNodes, onNodesChange] = useNodesState([]);
-    const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+export const MoleculeCanvas = ({ molecule, onSelectionChange, onManualEdit }: MoleculeCanvasProps) => {
+    // Initialize with explicit types to avoid 'never[]' error
+    const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+    const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
+    // Explicitly unused variables removed or used
+    // const [selectionMode, setSelectionMode] = useState<SelectionMode>(SelectionMode.Partial);
+    // We just use isSelectMode boolean to toggle props.
+
+    const [isSelectMode, setIsSelectMode] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
     // Convert VisualMolecule to React Flow Nodes/Edges
     useEffect(() => {
         if (!molecule) return;
 
-        // Scale coordinates for better visibility (Angstroms -> Pixels)
         const SCALE = 60;
-
-        // Center offset (approximate) - could be dynamic
         const CENTER_X = window.innerWidth / 2;
         const CENTER_Y = window.innerHeight / 2;
 
         const newNodes: Node[] = molecule.atoms.map((atom) => ({
             id: atom.id.toString(),
             type: 'atom',
-            position: { x: atom.x * SCALE + CENTER_X, y: atom.y * SCALE + CENTER_Y }, // Simple projection
+            position: { x: atom.x * SCALE + CENTER_X, y: atom.y * SCALE + CENTER_Y },
             data: { ...atom },
             draggable: false,
             connectable: false,
+            selected: atom.ui_state === 'SELECTED',
+            selectable: true,
         }));
 
         const newEdges: Edge[] = molecule.bonds.map((bond, idx) => ({
@@ -59,34 +70,68 @@ export const MoleculeCanvas = ({ molecule, onSelectionChange }: MoleculeCanvasPr
             target: bond.target.toString(),
             type: 'bond',
             data: { ...bond },
+            selectable: false,
         }));
 
         setNodes(newNodes);
         setEdges(newEdges);
     }, [molecule, setNodes, setEdges]);
 
-    const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-        // Toggle selection logic could go here
-        // For now, let's just propagate the click ID
-        const atomId = parseInt(node.id);
-
-        // We need to manage multi-selection state locally or upstream.
-        // Let's assume onSelectionChange receives the NEW complete list.
-        // For this MVP, let's just toggle the clicked one in the upstream state? 
-        // Or we handle the "Blue Halo" here by updating local node data?
-
-        // The requirement says: "Clicking an atom draws a blue halo (Active Selection)"
-        // and "User selects atoms... + types prompt".
-
-        // We'll trust the parent to handle the logic, we just notify click.
-        // But to show visual feedback immediately, the parent needs to update the molecule prop
-        // with `ui_state: SELECTED`.
-
-        onSelectionChange([atomId]);
+    // Handle Selection Change from React Flow
+    const onSelectionChangeHandler = useCallback(({ nodes }: OnSelectionChangeParams) => {
+        const ids = nodes.map(n => parseInt(n.id));
+        setSelectedIds(ids);
+        onSelectionChange(ids);
     }, [onSelectionChange]);
 
+    // Toggle Mode
+    const toggleMode = () => {
+        setIsSelectMode(!isSelectMode);
+    };
+
+    // Keyboard Shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (selectedIds.length === 0) return;
+
+            // Avoid triggering when typing in an input
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                onManualEdit?.('delete', selectedIds);
+            } else {
+                // Check for single letter elements
+                const key = e.key.toUpperCase();
+                const validElements = ['C', 'N', 'O', 'S', 'F', 'P', 'I'];
+                if (validElements.includes(key)) {
+                    onManualEdit?.(`replace:${key}`, selectedIds);
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedIds, onManualEdit]);
+
     return (
-        <div className="w-full h-full bg-chemist-bg">
+        <div className="w-full h-full bg-chemist-bg relative">
+            {/* Toolbar */}
+            <div className="absolute top-4 right-16 z-10 flex gap-2">
+                <button
+                    onClick={toggleMode}
+                    className={`px-3 py-1.5 rounded text-sm font-medium shadow-md transition-colors ${
+                        isSelectMode
+                            ? 'bg-chemist-accent text-white'
+                            : 'bg-chemist-panel text-gray-300 hover:bg-white/10'
+                    }`}
+                >
+                    {isSelectMode ? 'Lasso Mode' : 'Pan Mode'}
+                </button>
+                <div className="bg-chemist-panel/80 text-xs text-gray-400 px-3 py-1.5 rounded backdrop-blur-sm">
+                    {selectedIds.length} selected
+                </div>
+            </div>
+
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -94,13 +139,16 @@ export const MoleculeCanvas = ({ molecule, onSelectionChange }: MoleculeCanvasPr
                 onEdgesChange={onEdgesChange}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
-                onNodeClick={onNodeClick}
+                onSelectionChange={onSelectionChangeHandler}
                 fitView
                 minZoom={0.5}
                 maxZoom={2}
                 nodesDraggable={false}
-                panOnDrag={true}
+                panOnDrag={!isSelectMode}
+                selectionOnDrag={isSelectMode}
+                selectionMode={SelectionMode.Partial}
                 zoomOnDoubleClick={false}
+                multiSelectionKeyCode={null}
             >
                 <Background gap={20} color="#333" />
                 <Controls className="bg-chemist-panel border-chemist-muted text-white" />
