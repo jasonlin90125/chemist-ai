@@ -175,9 +175,53 @@ class ChemistryTools:
             rw_mol.UpdatePropertyCache(strict=False)
             Chem.SanitizeMol(rw_mol)
             
-            # Simple, standard re-layout.
-            # This guarantees that the new fragment and the old molecule share the same scale/style.
-            AllChem.Compute2DCoords(rw_mol)
+            # Attempt to generate coords ONLY for the new atoms, preserving the old ones.
+            # But 'add_substructure' might have messed up indices or connected things weirdly.
+            # The standard Compute2DCoords resets everything.
+            # Instead, we will try to use GenerateDepictionMatching2DStructure if possible,
+            # BUT we need a reference. 'current_mol' has the original coords.
+
+            try:
+                # We want to preserve the layout of 'current_mol' as much as possible.
+                # However, rw_mol now has extra atoms.
+                # We can try to align rw_mol to current_mol.
+                # If that fails, we fall back to full re-layout (but that causes the "huge size" issue if defaults differ).
+
+                # Note: GenerateDepictionMatching2DStructure requires the reference to be a substructure of the new mol.
+                # Since we just added something, current_mol IS a substructure of rw_mol (mostly).
+                # But we removed an H, so strictly it might not be a perfect substructure if we search by exact graph.
+                # But let's try.
+
+                # Alternatively, we just let align_and_diff handle it later?
+                # But the agent returns 'new_mol' immediately for next steps.
+                # If we return it with (0,0,0) for new atoms, next steps might fail or image generation might look bad.
+
+                # Let's try to generate coords for the new atoms using ConstrainedEmbed? No, that's 3D.
+
+                # Best approach for 2D addition:
+                # 1. Compute 2D coords for the fragment (centered at origin).
+                # 2. Translate fragment so attachment point matches anchor atom position + offset.
+                # 3. Use those coords.
+
+                # However, implementing that manually in RDKit requires accessing Conformer.
+
+                if rw_mol.GetNumConformers() == 0:
+                     AllChem.Compute2DCoords(rw_mol)
+                else:
+                    # If we have a conformer, we should update it.
+                    # This is tricky without a full constrained generation.
+                    # For now, let's use GenerateDepictionMatching2DStructure which is designed for this.
+                    # We use the original 'current_mol' as the template.
+
+                    # We need to ensure current_mol has a conformer (it should).
+                    if current_mol.GetNumConformers() > 0:
+                         AllChem.GenerateDepictionMatching2DStructure(rw_mol, current_mol, acceptFailure=True)
+                    else:
+                         AllChem.Compute2DCoords(rw_mol)
+
+            except Exception:
+                # Fallback
+                AllChem.Compute2DCoords(rw_mol)
             
         except Exception as e:
             raise ValueError(f"Adding substructure failed: {str(e)}")

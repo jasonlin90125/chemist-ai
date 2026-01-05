@@ -117,6 +117,8 @@ def align_and_diff(original_mol: Chem.Mol, new_mol: Chem.Mol) -> VisualMolecule:
         try:
             # 2. Try partial structure alignment
             # Important: We want to preserve the coordinate system of the original molecule
+            # If the new molecule already has good coords (from add_substructure logic), we might skip this?
+            # But let's force alignment to be safe.
             AllChem.GenerateDepictionMatching2DStructure(new_mol, original_mol, acceptFailure=True)
         except Exception:
             # 3. Fallback: Index-based coordinate mapping

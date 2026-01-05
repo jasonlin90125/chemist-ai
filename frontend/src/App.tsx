@@ -24,7 +24,18 @@ function App() {
     const handleSendPrompt = async (prompt: string) => {
         const selectedIds = ketcherRef.current?.getSelectedAtoms() || [];
         // Get live molecule from Ketcher to ensure we're editing what's displayed
-        const liveMolfile = await ketcherRef.current?.getMolfile();
+        let liveMolfile = null;
+        try {
+            liveMolfile = await ketcherRef.current?.getMolfile();
+            if (!liveMolfile) {
+                 console.warn("Ketcher returned null molfile, falling back to state.");
+            } else {
+                 console.log("Got live molfile from Ketcher (length: " + liveMolfile.length + ")");
+            }
+        } catch (e) {
+            console.error("Error fetching live molfile:", e);
+        }
+
         requestEdit(prompt, selectedIds, liveMolfile);
     };
 

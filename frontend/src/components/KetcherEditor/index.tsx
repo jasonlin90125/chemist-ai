@@ -42,7 +42,8 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
             getMolfile: async () => {
                 if (!ketcherRef.current) return null;
                 try {
-                    return await ketcherRef.current.getMolfile();
+                    // Force v3000 for better compatibility with RDKit
+                    return await ketcherRef.current.getMolfile('v3000');
                 } catch (e) {
                     console.error("Failed to get molfile:", e);
                     return null;
