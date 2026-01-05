@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { MoleculeCanvas } from './components/MoleculeCanvas';
+import { useEffect, useRef } from 'react';
+import { KetcherEditor, KetcherEditorRef } from './components/KetcherEditor';
 import { ChatPanel } from './components/ChatPanel';
 import { DiffActionBar } from './components/DiffActionBar';
 import { useMolecule } from './hooks/useMolecule';
@@ -8,59 +8,57 @@ function App() {
     const {
         molecule,
         status,
+        error,
         loadInitial,
         requestEdit,
         acceptChange,
-        rejectChange,
-        handleSelection
+        rejectChange
     } = useMolecule();
+
+    const ketcherRef = useRef<KetcherEditorRef>(null);
 
     useEffect(() => {
         loadInitial();
     }, []);
 
-    const handleManualEdit = (action: string, selectedIds: number[]) => {
-        if (status === 'LOADING' || status === 'DIFFING') return;
-
-        if (action === 'delete') {
-            requestEdit(`Delete atoms ${selectedIds.join(', ')}`, selectedIds);
-        } else if (action.startsWith('replace:')) {
-            const element = action.split(':')[1];
-            requestEdit(`Replace atoms ${selectedIds.join(', ')} with ${element}`, selectedIds);
-        }
+    const handleSendPrompt = (prompt: string) => {
+        const selectedIds = ketcherRef.current?.getSelectedAtoms() || [];
+        requestEdit(prompt, selectedIds);
     };
 
     return (
-        <div className="w-full h-screen bg-chemist-bg relative overflow-hidden">
+        <div className="flex w-full h-screen bg-white overflow-hidden">
 
-            {/* 3D/Graph Stage */}
-            <MoleculeCanvas
-                molecule={molecule}
-                onSelectionChange={handleSelection}
-                onManualEdit={handleManualEdit}
-            />
-
-            {/* UI Overlay */}
+            {/* Left Sidebar */}
             <ChatPanel
-                onSendPrompt={requestEdit}
+                onSendPrompt={handleSendPrompt}
                 isLoading={status === 'LOADING'}
+                error={error}
             />
 
-            {/* Diff Controls */}
-            {status === 'DIFFING' && (
-                <DiffActionBar
-                    onAccept={acceptChange}
-                    onReject={rejectChange}
+            {/* Main Stage */}
+            <div className="flex-1 relative h-full bg-gray-50">
+                <KetcherEditor
+                    ref={ketcherRef}
+                    molecule={molecule}
                 />
-            )}
 
-            {/* Loading Indicator */}
-            {status === 'LOADING' && (
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/50 backdrop-blur rounded-lg px-6 py-4 flex flex-col items-center">
-                    <div className="w-8 h-8 border-2 border-chemist-accent border-t-transparent rounded-full animate-spin mb-2"></div>
-                    <span className="text-white text-sm font-medium tracking-wide">Synthesizing...</span>
-                </div>
-            )}
+                {/* Diff Controls (Floating over editor) */}
+                {status === 'DIFFING' && (
+                    <DiffActionBar
+                        onAccept={acceptChange}
+                        onReject={rejectChange}
+                    />
+                )}
+
+                {/* Loading Indicator (Centered over editor) */}
+                {status === 'LOADING' && (
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white/80 backdrop-blur shadow-xl rounded-xl px-8 py-6 flex flex-col items-center border border-gray-100">
+                        <div className="w-10 h-10 border-3 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                        <span className="text-gray-600 text-sm font-medium tracking-wide">Synthesizing...</span>
+                    </div>
+                )}
+            </div>
 
         </div>
     );

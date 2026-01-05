@@ -8,6 +8,7 @@ export const useMolecule = () => {
 
     const [status, setStatus] = useState<"IDLE" | "LOADING" | "DIFFING">("IDLE");
     const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+    const [error, setError] = useState<string | null>(null);
 
     // Load initial molecule
     const loadInitial = async () => {
@@ -16,20 +17,12 @@ export const useMolecule = () => {
             setMolecule(data);
         } catch (e) {
             console.error("Failed to load molecule", e);
+            setError("Failed to load initial molecule.");
         }
     };
 
     const updateSelectionState = (indices: number[]) => {
         setSelectedIndices(indices);
-        if (molecule) {
-            setMolecule({
-                ...molecule,
-                atoms: molecule.atoms.map(a => ({
-                    ...a,
-                    ui_state: indices.includes(a.id) ? "SELECTED" : "DEFAULT"
-                }))
-            });
-        }
     };
 
 
@@ -37,6 +30,7 @@ export const useMolecule = () => {
         if (!molecule) return;
 
         setStatus("LOADING");
+        setError(null);
         // Save current as original for "Reject" capability
         setOriginalMolecule(molecule);
 
@@ -49,8 +43,12 @@ export const useMolecule = () => {
 
             setMolecule(proposal);
             setStatus("DIFFING");
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
+
+            // Extract error message from axios if possible
+            const msg = e.response?.data?.detail || e.message || "An unexpected error occurred.";
+            setError(msg);
             setStatus("IDLE");
         }
     };
@@ -81,6 +79,7 @@ export const useMolecule = () => {
     return {
         molecule,
         status,
+        error,
         loadInitial,
         requestEdit,
         acceptChange,

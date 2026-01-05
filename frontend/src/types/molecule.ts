@@ -20,6 +20,7 @@ export interface VisualMolecule {
     molecule_id: string;
     atoms: Atom[];
     bonds: Bond[];
+    mol_block?: string;
 }
 
 export interface EditRequest {
