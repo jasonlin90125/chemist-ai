@@ -9,7 +9,7 @@ from app.models import EditRequest, VisualMolecule
 from app.chemistry.molecule import VisualMoleculeBuilder, align_and_diff
 from app.chemistry.tools import ChemistryTools
 from rdkit import Chem
-from rdkit.Chem import Draw
+from rdkit.Chem import Draw, AllChem
 
 # Configure OpenRouter inside function to pick up env vars dynamically
 
@@ -90,17 +90,29 @@ TOOLS_SCHEMA = [
     }
 ]
 
-SYSTEM_PROMPT = """You are Chemist.ai, an expert computational chemist.
-You do not generate SMILES directly. You operate on the provided chemical graph by calling tools.
-Always prioritize stability and validity.
+SYSTEM_PROMPT = """
+You are a master organic chemist and molecular editor AI. 
+Your goal is to modify chemical structures based on natural language requests.
 
-GUIDELINES:
-1. When asked to "make this a pyridine", specific atomic modifications are preferred over rebuilding.
-2. For `add_substructure`: Provide valid RDKit SMILES. 
+Available tools:
+- modify_atom(atom_id, new_element_symbol)
+- replace_atoms(atom_ids, new_element_symbol)
+- remove_atoms(atom_ids)
+- add_substructure(anchor_atom_id, smiles_fragment)
+- replace_substructure(atom_ids, smiles_fragment)
+
+Guidelines:
+1. You will be provided with:
+    - A Mapped SMILES representation of the current molecule where atoms are noted as [Element:Index].
+    - A set of 'Selected Indices' from the user.
+    - An image of the molecule with atom indices labeled as 'SymbolINDEX' (e.g., C4, N10).
+2. Use the image and mapped SMILES together to confirm which atom_ids correspond to the user's request.
+3. Only use the provided tools.
+4. Ensure SMILES fragments are chemically valid and use explicit parentheses for branching:
    - Methyl: 'C'
    - Trifluoromethyl: 'C(F)(F)F' (NOT 'CF3' - numbers indicate rings)
    - Do not use abbreviations like 'Ph', 'Me'. Use explicit SMILES.
-3. Refer to the provided Mapped SMILES to identify atom indices. The indices in the mapped SMILES `[Element:Index]` correspond to the atom_ids you should use in tool calls.
+5. The indices in the mapped SMILES and image correspond to the atom_ids you should use in tool calls.
 """
 
 def generate_molecule_image(mol: Chem.Mol) -> str:
@@ -113,7 +125,7 @@ def generate_molecule_image(mol: Chem.Mol) -> str:
         for atom in mol.GetAtoms():
             atom.SetProp('atomLabel', f"{atom.GetSymbol()}{atom.GetIdx()}")
 
-        img = Draw.MolToImage(mol, size=(400, 400))
+        img = Draw.MolToImage(mol, size=(600, 600))
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -139,22 +151,32 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
     
     # Generate Context
     mapped_smiles = ChemistryTools.get_mapped_smiles(current_mol)
-    # image_b64 = generate_molecule_image(current_mol) # Ready for vision models
+    image_b64 = generate_molecule_image(current_mol)
 
     # 2. Call AI
+    user_content = [
+        {
+            "type": "text", 
+            "text": f"Current Molecule (Mapped SMILES): {mapped_smiles}\nSelection Indices: {request.selected_indices}\n\nUser Request: \"{request.user_prompt}\""
+        }
+    ]
+    
+    if image_b64:
+        user_content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{image_b64}"
+            }
+        })
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"""
-        Current Molecule (Mapped SMILES): {mapped_smiles}
-        Selection Indices: {request.selected_indices}
-        
-        User Request: "{request.user_prompt}"
-        """}
+        {"role": "user", "content": user_content}
     ]
     
     try:
         response = client.chat.completions.create(
-            model="nvidia/nemotron-3-nano-30b-a3b:free",
+            model="google/gemma-3-27b-it:free",
             messages=messages,
             tools=TOOLS_SCHEMA,
             tool_choice="auto"
@@ -170,24 +192,33 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
         
         # Fallback for text-based tool calls (Gemma/Free models)
         if not tool_calls and message.content:
-            matches = re.finditer(r"\[(\w+)\((.*?)\)\]", message.content)
-            for m in matches:
-                fn_name = m.group(1)
-                args_str = m.group(2)
-                try:
-                    dict_str = re.sub(r"(\w+)\s*=", r"'\1':", args_str)
-                    args = ast.literal_eval(f"{{{dict_str}}}")
-
-                    class PseudoToolCall:
-                        class Function:
-                            def __init__(self, n, a):
-                                self.name = n
-                                self.arguments = json.dumps(a)
-                        def __init__(self, n, a):
-                            self.function = self.Function(n, a)
-                    tool_calls.append(PseudoToolCall(fn_name, args))
-                except Exception as e:
-                    print(f"Fallback parse error: {e}")
+            # Clean up content for parsing
+            clean_content = message.content.strip()
+            # Remove markdown code blocks if present
+            clean_content = re.sub(r"^```python\s*|\s*```$", "", clean_content, flags=re.MULTILINE)
+            # Ensure it looks like a list or a series of calls
+            if not clean_content.startswith("["):
+                clean_content = f"[{clean_content}]"
+            
+            try:
+                tree = ast.parse(clean_content)
+                if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.List):
+                    for node in tree.body[0].value.elts:
+                        if isinstance(node, ast.Call):
+                            fn_name = node.func.id
+                            # Extract keyword arguments
+                            args = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords}
+                            
+                            class PseudoToolCall:
+                                class Function:
+                                    def __init__(self, n, a):
+                                        self.name = n
+                                        self.arguments = json.dumps(a)
+                                def __init__(self, n, a):
+                                    self.function = self.Function(n, a)
+                            tool_calls.append(PseudoToolCall(fn_name, args))
+            except Exception as e:
+                print(f"Fallback parse error: {e}. Content was: {clean_content}")
 
         if tool_calls:
             print(f"Tool calls found: {len(tool_calls)}")
@@ -233,8 +264,18 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
         # 5. Apply Diff Metadata
         final_vis = ChemistryTools.apply_diff_metadata(current_mol, new_mol, aligned_vis)
         
+        # Check if any changes were made
+        has_changes = any(a.diff_state != "EXISTING" for a in final_vis.atoms) or \
+                      any(b.diff_state != "EXISTING" for b in final_vis.bonds)
+        
+        if not has_changes:
+            raise Exception("No changes proposed by AI.")
+
         return final_vis
 
     except Exception as e:
         print(f"AI Error: {e}")
+        # If it's our direct "No changes" error, re-raise to bubble up
+        if "No changes proposed" in str(e):
+            raise e
         return request.current_molecule

@@ -21,6 +21,7 @@ class VisualMolecule(BaseModel):
     molecule_id: str
     atoms: List[Atom]
     bonds: List[Bond]
+    mol_block: Optional[str] = None
 
 class EditRequest(BaseModel):
     current_molecule: VisualMolecule

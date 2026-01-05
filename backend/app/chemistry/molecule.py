@@ -40,10 +40,16 @@ class VisualMoleculeBuilder:
                 diff_state="EXISTING"
             ))
             
+        try:
+            mol_block = Chem.MolToMolBlock(mol, forceV3000=True)
+        except:
+            mol_block = None
+            
         return VisualMolecule(
             molecule_id=mol_id,
             atoms=atoms,
-            bonds=bonds
+            bonds=bonds,
+            mol_block=mol_block
         )
 
     @staticmethod
