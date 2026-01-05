@@ -1,0 +1,18 @@
+import axios from 'axios';
+import { VisualMolecule, EditRequest } from '../types/molecule';
+
+const api = axios.create({
+    baseURL: 'http://localhost:8000/api',
+});
+
+export const moleculeApi = {
+    getInitial: async (): Promise<VisualMolecule> => {
+        const res = await api.get('/molecule/ibrutinib');
+        return res.data;
+    },
+
+    edit: async (req: EditRequest): Promise<VisualMolecule> => {
+        const res = await api.post('/molecule/edit', req);
+        return res.data;
+    }
+};

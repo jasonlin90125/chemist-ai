@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  background-color: #0F1115;
+  color: #E2E8F0;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Custom React Flow styling */
+.react-flow__node {
+  border: none;
+  background: transparent;
+}
+
+.react-flow__handle {
+  visibility: hidden; /* Hide handles, we manage connections via data */
+}
