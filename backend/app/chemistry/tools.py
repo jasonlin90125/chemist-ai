@@ -2,47 +2,71 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 from app.chemistry.molecule import VisualMoleculeBuilder, align_and_diff
 from app.chemistry.constants import FUNCTIONAL_GROUPS
+from app.chemistry.substructures import SUBSTRUCTURE_PATTERNS
 from app.models import VisualMolecule
 import copy
 
 class ChemistryTools:
     @staticmethod
-    def _get_fragment_and_attachment(smiles_or_name: str) -> tuple[Chem.Mol, int]:
+    def _get_fragment_and_attachment(smiles_or_name: str, variant_idx: int = 0) -> tuple[Chem.Mol, int]:
         """
         Helper to get RDKit mol and the index of the atom to attach.
-        If SMILES has '*', it uses the neighbor of '*' as attachment point.
+        Identifies all symmetry-unique attachment possibilities if variant_idx > 0.
         Returns (mol_without_dummy, attachment_idx).
         """
-        # 1. Lookup in dictionary
-        smiles = FUNCTIONAL_GROUPS.get(smiles_or_name.lower(), smiles_or_name)
+        # 1. Lookup in dictionaries
+        query = smiles_or_name.lower()
+        smiles = FUNCTIONAL_GROUPS.get(query)
+        if not smiles:
+            smiles = SUBSTRUCTURE_PATTERNS.get(query, smiles_or_name)
         
         # 2. Parse SMILES
         mol = Chem.MolFromSmiles(smiles)
         if not mol:
-            return None, -1
+            mol = Chem.MolFromSmiles(smiles.capitalize())
+            if not mol:
+                return None, -1
             
-        # 3. Find dummy atom '*' (atomic number 0)
-        attachment_idx = 0 # Default
+        # 3. Handle explicit dummy atom '*' (the specific intended attachment)
         dummy_idx = -1
-        
         for atom in mol.GetAtoms():
             if atom.GetAtomicNum() == 0:
                 dummy_idx = atom.GetIdx()
-                # Find the neighbor of this dummy atom
-                neighbors = atom.GetNeighbors()
-                if neighbors:
-                    attachment_idx = neighbors[0].GetIdx()
                 break
         
-        # 4. Remove dummy atom if found
-        if dummy_idx != -1:
+        # If we have a dummy AND variant_idx is 0, we use the intended attachment
+        if dummy_idx != -1 and variant_idx == 0:
+            neighbors = mol.GetAtomWithIdx(dummy_idx).GetNeighbors()
+            attachment_idx = neighbors[0].GetIdx() if neighbors else 0
+            
             nm = Chem.RWMol(mol)
             nm.RemoveAtom(dummy_idx)
-            # Adjust attachment_idx if it was shifted
             if dummy_idx < attachment_idx:
                 attachment_idx -= 1
             return nm.GetMol(), attachment_idx
-            
+
+        # 4. Otherwise (no dummy or cycling requested), find all unique atoms
+        # Remove dummy first if it exists to get clean symmetry ranks
+        if dummy_idx != -1:
+            nm = Chem.RWMol(mol)
+            nm.RemoveAtom(dummy_idx)
+            mol = nm.GetMol()
+
+        # Calculate symmetry ranks to find unique attachment points
+        ranks = list(Chem.CanonicalRankAtoms(mol, breakTies=False))
+        unique_ranks = sorted(list(set(ranks)))
+        
+        # Map each unique rank to the first atom index that has it
+        unique_atom_indices = []
+        for r in unique_ranks:
+            for i, rank in enumerate(ranks):
+                if rank == r:
+                    unique_atom_indices.append(i)
+                    break
+        
+        # Select the attachment index based on variant_idx
+        attachment_idx = unique_atom_indices[variant_idx % len(unique_atom_indices)]
+        
         return mol, attachment_idx
 
     @staticmethod
@@ -115,17 +139,16 @@ class ChemistryTools:
         return rw_mol.GetMol()
 
     @staticmethod
-    def add_substructure(current_mol: Chem.Mol, anchor_atom_id: int, smiles_fragment: str) -> Chem.Mol:
+    def add_substructure(current_mol: Chem.Mol, anchor_atom_id: int, smiles_fragment: str, variant_idx: int = 0) -> Chem.Mol:
         """
         Adds a fragment at a specific anchor point.
-        Automatically replaces an implicit hydrogen if needed.
         """
         rw_mol = Chem.RWMol(current_mol)
         
         if anchor_atom_id >= rw_mol.GetNumAtoms():
              raise ValueError(f"Anchor atom ID {anchor_atom_id} is out of range.")
 
-        fragment, frag_attach_idx = ChemistryTools._get_fragment_and_attachment(smiles_fragment)
+        fragment, frag_attach_idx = ChemistryTools._get_fragment_and_attachment(smiles_fragment, variant_idx)
         
         if not fragment:
             raise ValueError(f"Failed to parse or find fragment: {smiles_fragment}")
@@ -174,77 +197,16 @@ class ChemistryTools:
         try:
             rw_mol.UpdatePropertyCache(strict=False)
             Chem.SanitizeMol(rw_mol)
-            
-            # Attempt to generate coords ONLY for the new atoms, preserving the old ones.
-            # But 'add_substructure' might have messed up indices or connected things weirdly.
-            # The standard Compute2DCoords resets everything.
-            # Instead, we will try to use GenerateDepictionMatching2DStructure if possible,
-            # BUT we need a reference. 'current_mol' has the original coords.
-
-            try:
-                # We want to preserve the layout of 'current_mol' as much as possible.
-                # GenerateDepictionMatching2DStructure works best when the template has standard bond lengths (~1.5A).
-                # If 'current_mol' is scaled (e.g. from UI), the new atoms will be generated at standard size,
-                # creating a distortion. We need to normalize scale first.
-
-                if rw_mol.GetNumConformers() == 0:
-                     AllChem.Compute2DCoords(rw_mol)
-                else:
-                    if current_mol.GetNumConformers() > 0:
-                        # 1. Calculate scale factor
-                        total_len = 0.0
-                        count = 0
-                        conf = current_mol.GetConformer()
-                        for bond in current_mol.GetBonds():
-                            u = bond.GetBeginAtomIdx()
-                            v = bond.GetEndAtomIdx()
-                            p1 = conf.GetAtomPosition(u)
-                            p2 = conf.GetAtomPosition(v)
-                            dist = ((p1.x - p2.x)**2 + (p1.y - p2.y)**2)**0.5
-                            total_len += dist
-                            count += 1
-
-                        avg_len = total_len / count if count > 0 else 1.5
-                        scale_factor = avg_len / 1.5
-
-                        # 2. Normalize template if needed
-                        # Threshold: if scale is off by more than 10%
-                        if abs(scale_factor - 1.0) > 0.1:
-                            template_mol = Chem.Mol(current_mol)
-                            template_conf = template_mol.GetConformer()
-                            norm_scale = 1.0 / scale_factor
-                            for i in range(template_mol.GetNumAtoms()):
-                                pos = template_conf.GetAtomPosition(i)
-                                template_conf.SetAtomPosition(i, (pos.x * norm_scale, pos.y * norm_scale, pos.z * norm_scale))
-
-                            # Generate coords using normalized template.
-                            # The new atoms will be generated at standard size (~1.5), which matches the template now.
-                            AllChem.GenerateDepictionMatching2DStructure(rw_mol, template_mol, acceptFailure=True)
-
-                            # 3. Scale result back to original size
-                            rw_conf = rw_mol.GetConformer()
-                            for i in range(rw_mol.GetNumAtoms()):
-                                pos = rw_conf.GetAtomPosition(i)
-                                rw_conf.SetAtomPosition(i, (pos.x * scale_factor, pos.y * scale_factor, pos.z * scale_factor))
-                        else:
-                            # Standard scale, proceed as usual
-                            AllChem.GenerateDepictionMatching2DStructure(rw_mol, current_mol, acceptFailure=True)
-                    else:
-                         AllChem.Compute2DCoords(rw_mol)
-
-            except Exception:
-                # Fallback
-                AllChem.Compute2DCoords(rw_mol)
-            
+            AllChem.Compute2DCoords(rw_mol)
         except Exception as e:
             raise ValueError(f"Adding substructure failed: {str(e)}")
 
         return rw_mol.GetMol()
 
     @staticmethod
-    def replace_substructure(current_mol: Chem.Mol, atom_ids: list[int], smiles_fragment: str) -> Chem.Mol:
+    def replace_substructure(current_mol: Chem.Mol, atom_ids: list[int], smiles_fragment: str, variant_idx: int = 0) -> Chem.Mol:
         """
-        Removes the specified atoms and attaches the new fragment to the neighbor of the first removed atom.
+        Removes the specified atoms and attaches the new fragment.
         """
         rw_mol = Chem.RWMol(current_mol)
         atoms_to_remove = set(atom_ids)
@@ -281,7 +243,7 @@ class ChemistryTools:
 
         # Add fragment
         if current_attachment != -1:
-            fragment, frag_attach_idx = ChemistryTools._get_fragment_and_attachment(smiles_fragment)
+            fragment, frag_attach_idx = ChemistryTools._get_fragment_and_attachment(smiles_fragment, variant_idx)
             if fragment and frag_attach_idx != -1:
                 frag_idx_map = {}
                 for atom in fragment.GetAtoms():
@@ -307,10 +269,12 @@ class ChemistryTools:
         try:
             rw_mol.UpdatePropertyCache(strict=False)
             Chem.SanitizeMol(rw_mol)
+            AllChem.Compute2DCoords(rw_mol)
         except Exception as e:
             raise ValueError(f"Replacing substructure failed: {str(e)}")
 
         return rw_mol.GetMol()
+
 
     @staticmethod
     def get_mapped_smiles(mol: Chem.Mol) -> str:
@@ -322,44 +286,6 @@ class ChemistryTools:
         for atom in m.GetAtoms():
             atom.SetAtomMapNum(atom.GetIdx())
         return Chem.MolToSmiles(m)
-
-    @staticmethod
-    def apply_diff_metadata(original_mol: Chem.Mol, new_mol: Chem.Mol, visual_mol: VisualMolecule) -> VisualMolecule:
-        """
-        Compares the new visual molecule against the original to mark ADDED/EXISTING.
-        """
-        # A simple heuristic: 
-        # Atoms that have the same coordinate (approx) and same element are EXISTING.
-        # Others are ADDED.
-        
-        old_atoms = []
-        conf = original_mol.GetConformer()
-        for i in range(original_mol.GetNumAtoms()):
-            pos = conf.GetAtomPosition(i)
-            old_atoms.append({
-                "x": pos.x,
-                "y": pos.y,
-                "element": original_mol.GetAtomWithIdx(i).GetSymbol()
-            })
-            
-        for atom in visual_mol.atoms:
-            match = False
-            for old in old_atoms:
-                dx = atom.x - old["x"]
-                dy = atom.y - old["y"]
-                dist_sq = dx*dx + dy*dy
-                if dist_sq < 0.25 and atom.element == old["element"]:
-                    match = True
-                    break
-            
-            if match:
-                atom.diff_state = "EXISTING"
-            else:
-                atom.diff_state = "ADDED"
-                
-        return visual_mol
-
-    # ==================== NEW TOOLS ====================
 
     @staticmethod
     def find_substructure(mol: Chem.Mol, pattern_name: str) -> list[list[int]]:
@@ -415,6 +341,7 @@ class ChemistryTools:
             "tpsa": round(rdMolDescriptors.CalcTPSA(mol), 2),
             "logp": round(Descriptors.MolLogP(mol), 2),
         }
+
 
     @staticmethod
     def check_structure(mol: Chem.Mol) -> dict:

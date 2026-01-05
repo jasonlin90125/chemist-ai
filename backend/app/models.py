@@ -27,3 +27,9 @@ class EditRequest(BaseModel):
     current_molecule: VisualMolecule
     user_prompt: str
     selected_indices: List[int]
+
+class SimpleEditRequest(BaseModel):
+    action: str  # e.g., "add_substructure", "remove_atoms"
+    current_molecule: VisualMolecule
+    selected_indices: List[int]
+    parameters: dict

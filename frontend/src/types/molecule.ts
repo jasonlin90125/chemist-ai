@@ -28,3 +28,10 @@ export interface EditRequest {
     user_prompt: string;
     selected_indices: number[];
 }
+
+export interface SimpleEditRequest {
+    action: string;
+    current_molecule: VisualMolecule;
+    selected_indices: number[];
+    parameters: Record<string, any>;
+}

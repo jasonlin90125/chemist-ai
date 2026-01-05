@@ -5,7 +5,7 @@ import uuid
 
 class VisualMoleculeBuilder:
     @staticmethod
-    def mol_to_visual_json(mol: Chem.Mol, mol_id: str = None) -> VisualMolecule:
+    def mol_to_visual_json(mol: Chem.Mol, mol_id: str = None, diff_map: dict[int, str] = None) -> VisualMolecule:
         if not mol_id:
             mol_id = f"mol_{uuid.uuid4().hex[:8]}"
             
@@ -13,31 +13,44 @@ class VisualMoleculeBuilder:
         conf = mol.GetConformer()
         
         for atom in mol.GetAtoms():
-            pos = conf.GetAtomPosition(atom.GetIdx())
+            idx = atom.GetIdx()
+            pos = conf.GetAtomPosition(idx)
+            
+            # Use diff_map if provided, else default to EXISTING
+            diff_state = diff_map.get(idx, "EXISTING") if diff_map else "EXISTING"
+            
             atoms.append(Atom(
-                id=atom.GetIdx(),
+                id=idx,
                 element=atom.GetSymbol(),
                 x=pos.x,
                 y=pos.y,
                 charge=atom.GetFormalCharge(),
                 implicit_h=atom.GetTotalNumHs(),
                 ui_state="DEFAULT",
-                diff_state="EXISTING"
+                diff_state=diff_state
             ))
             
         bonds = []
         for bond in mol.GetBonds():
+            b1, b2 = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
             order_map = {
                 Chem.BondType.SINGLE: "SINGLE",
                 Chem.BondType.DOUBLE: "DOUBLE",
                 Chem.BondType.TRIPLE: "TRIPLE",
                 Chem.BondType.AROMATIC: "AROMATIC"
             }
+            
+            # A bond is EXISTING if both atoms are EXISTING
+            bond_diff = "EXISTING"
+            if diff_map:
+                if diff_map.get(b1) == "ADDED" or diff_map.get(b2) == "ADDED":
+                    bond_diff = "ADDED"
+
             bonds.append(Bond(
-                source=bond.GetBeginAtomIdx(),
-                target=bond.GetEndAtomIdx(),
+                source=b1,
+                target=b2,
                 order=order_map.get(bond.GetBondType(), "SINGLE"),
-                diff_state="EXISTING"
+                diff_state=bond_diff
             ))
             
         try:
@@ -59,11 +72,6 @@ class VisualMoleculeBuilder:
         
         # Add atoms
         atom_map = {} # visual_id -> rdkit_idx
-        # We need to sort by ID to ensure consistent ordering if IDs are sequential 
-        # but RDKit indices are 0-based.
-        # Ideally, we trust the input order or re-index. 
-        # For this simple version, we'll assume IDs map to indices if we insert in order,
-        # but to be safe we track the mapping.
         
         sorted_atoms = sorted(visual_mol.atoms, key=lambda a: a.id)
         
@@ -109,65 +117,105 @@ def get_ibrutinib() -> VisualMolecule:
     Chem.Kekulize(mol)
     return VisualMoleculeBuilder.mol_to_visual_json(mol, "mol_ibrutinib")
 
+def rigid_align(original_mol: Chem.Mol, new_mol: Chem.Mol) -> bool:
+    """
+    Manually aligns new_mol to original_mol by measuring scale and centroid 
+    of their Maximum Common Substructure (MCS).
+    Also attempts basic 2D rotation alignment.
+    """
+    mcs = rdFMCS.FindMCS([original_mol, new_mol], timeout=2)
+    if mcs.numAtoms < 2:
+        return False
+
+    pattern = Chem.MolFromSmarts(mcs.smartsString)
+    match_orig = original_mol.GetSubstructMatch(pattern)
+    match_new = new_mol.GetSubstructMatch(pattern)
+
+    if not match_orig or not match_new:
+        return False
+
+    conf_orig = original_mol.GetConformer()
+    conf_new = new_mol.GetConformer()
+
+    # 1. Centered coordinates
+    def get_centroid(mol, indices):
+        c = mol.GetConformer()
+        x, y = 0.0, 0.0
+        for i in indices:
+            p = c.GetAtomPosition(i)
+            x += p.x ; y += p.y
+        return x/len(indices), y/len(indices)
+
+    cx_o, cy_o = get_centroid(original_mol, match_orig)
+    cx_n, cy_n = get_centroid(new_mol, match_new)
+
+    # 2. Scale & Rotation (Simplified Procrustes/Kabsch in 2D)
+    # Solve for s, theta:  r_orig = s * R(theta) * r_new
+    # We use complex numbers approach: (x+iy)_orig = (s*e^itheta) * (x+iy)_new
+    
+    num = 0j
+    den = 0j
+    for i in range(len(match_orig)):
+        po = conf_orig.GetAtomPosition(match_orig[i])
+        pn = conf_new.GetAtomPosition(match_new[i])
+        
+        zo = complex(po.x - cx_o, po.y - cy_o)
+        zn = complex(pn.x - cx_n, pn.y - cy_n)
+        
+        num += zo * zn.conjugate()
+        den += zn * zn.conjugate()
+
+    if abs(den) < 1e-6:
+        return False
+
+    # Transformation T = num / den
+    t_complex = num / den
+    scale = abs(t_complex)
+    angle = 0 # Default if scale is 0
+    import math
+    if scale > 1e-6:
+        angle = math.atan2(t_complex.imag, t_complex.real)
+
+    print(f"DEBUG: RigidAlign Scale={scale:.2f}, Angle={math.degrees(angle):.1f}°")
+
+    # 3. Apply Transformation
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    
+    for i in range(new_mol.GetNumAtoms()):
+        p = conf_new.GetAtomPosition(i)
+        # 1. Translate to origin (relative to new centroid)
+        nx, ny = p.x - cx_n, p.y - cy_n
+        # 2. Scale and Rotate
+        rx = scale * (nx * cos_a - ny * sin_a)
+        ry = scale * (nx * sin_a + ny * cos_a)
+        # 3. Translate to original centroid
+        conf_new.SetAtomPosition(i, (rx + cx_o, ry + cy_o, 0.0))
+
+    return True
+
 def align_and_diff(original_mol: Chem.Mol, new_mol: Chem.Mol) -> VisualMolecule:
-    # 1. Find MCS with strict comparison to prevent flipping/wrong alignment
-    mcs = rdFMCS.FindMCS([original_mol, new_mol], timeout=5)
-    
-    if mcs.numAtoms > 0:
-        try:
-            # 2. Try partial structure alignment
-            # Important: We want to preserve the coordinate system of the original molecule
-            # If the new molecule already has good coords (from add_substructure logic), we might skip this?
-            # But let's force alignment to be safe.
-            AllChem.GenerateDepictionMatching2DStructure(new_mol, original_mol, acceptFailure=True)
-        except Exception:
-            # 3. Fallback: Index-based coordinate mapping
-            # This is risky if indices shifted significantly, but better than full reset
-            coordMap = {}
-            conf = original_mol.GetConformer()
-            from rdkit.Geometry import Point2D
-            for i in range(min(original_mol.GetNumAtoms(), new_mol.GetNumAtoms())):
-                pos = conf.GetAtomPosition(i)
-                coordMap[i] = Point2D(pos.x, pos.y)
-            AllChem.Compute2DCoords(new_mol, coordMap=coordMap)
-    else:
-        # Fallback if no common substructure
-        # This will reset scale, but it's unavoidable if there's no overlap
-        AllChem.Compute2DCoords(new_mol)
-
-    # 3. Compute Diff States
-    
-    # Needs a robust graph isomorphism or substructure match to map atoms
-    # For this MVP, we will try to assume RWMol operations might preserve some indices, 
-    # but strictly speaking, RDKit re-indexes.
-    # We will use the RDKit GetSubstructMatch to find the "Old" part in the "New" part.
-    
-    match = new_mol.GetSubstructMatch(original_mol)
-    
-    # This is a simplification. A real diff needs a complex graph edit distance or 
-    # ID tracking if we maintained persistent IDs through RDKit edits.
-    # Since we rebuild RDKit mols from JSON, IDs might be lost or shifted.
-    # STRATEGY: 
-    #   - Mark all atoms in new_mol as "ADDED" initially.
-    #   - Atoms that map to original_mol via MCS/SubstructMatch are "EXISTING".
-    #   - Atoms in original_mol that are NOT in the match are "REMOVED" (we need to return them too to visualize red).
-    
-    # To visualize "REMOVED" atoms, we actually need to return a "Super Graph" containing both.
-    # OR, the client handles the "REMOVED" by rendering the old molecule's ghosts.
-    # The requirement says: "Atom 8 (Carbon) turns Red... A new Nitrogen appears... in Green".
-    # This implies the returned JSON might need to contain the union of atoms, OR we rely on IDs.
-    
-    # Let's try to map IDs effectively.
-    
+    # 1. Alignment
+    success = False
     try:
-        Chem.Kekulize(new_mol)
-    except Exception:
-        pass # If kekulization fails (e.g. radicals), continue
+        success = rigid_align(original_mol, new_mol)
+    except Exception as e:
+        print(f"DEBUG: Rigid alignment failed: {e}")
 
-    vis_mol = VisualMoleculeBuilder.mol_to_visual_json(new_mol)
-    
-    # In a real heavy implementation, we'd use the unique atom IDs to track life-cycle.
-    # For now, let's just return the new molecule with everything 'EXISTING' to ensure basic aligned rendering first.
-    # The 'Diff' logic with Green/Red is refined in tools.py where we explicitly know what we changed.
-    
+    # 2. Diffing using MCS (Graph-based)
+    # We find the mapping of new_mol atoms back to original_mol
+    diff_map = {}
+    for atom in new_mol.GetAtoms():
+        diff_map[atom.GetIdx()] = "ADDED"
+
+    mcs = rdFMCS.FindMCS([original_mol, new_mol], timeout=2)
+    if mcs.numAtoms > 0:
+        pattern = Chem.MolFromSmarts(mcs.smartsString)
+        # Find which atoms in new_mol correspond to the original skeleton
+        match_new = new_mol.GetSubstructMatch(pattern)
+        for idx in match_new:
+            diff_map[idx] = "EXISTING"
+
+    # Final visual molecule with correct diff_state
+    vis_mol = VisualMoleculeBuilder.mol_to_visual_json(new_mol, diff_map=diff_map)
     return vis_mol

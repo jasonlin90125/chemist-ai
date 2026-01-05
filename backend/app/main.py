@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from app.models import VisualMolecule, EditRequest
+from app.models import VisualMolecule, EditRequest, SimpleEditRequest
 from app.chemistry.molecule import get_ibrutinib
-from app.ai.agent import process_molecule_edit
+from app.ai.agent import process_molecule_edit, process_simple_edit
 import os
 from dotenv import load_dotenv
 
@@ -34,6 +34,14 @@ async def edit_molecule(request: EditRequest):
     and returns a diffed proposal molecule.
     """
     return await process_molecule_edit(request)
+
+@app.post("/api/molecule/simple-edit", response_model=VisualMolecule)
+async def simple_edit_molecule(request: SimpleEditRequest):
+    """
+    Direct tool execution for simple tasks (add, remove, search)
+    without involving the LLM or images.
+    """
+    return await process_simple_edit(request)
 
 if __name__ == "__main__":
     import uvicorn

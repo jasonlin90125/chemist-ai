@@ -3,12 +3,13 @@ AI Agent for molecule editing.
 Simplified for capable LLMs (Gemini 3.0 Flash, Claude 3.5, etc.)
 """
 
+from fastapi import HTTPException
 import os
 import json
 import base64
 from io import BytesIO
 from openai import OpenAI
-from app.models import EditRequest, VisualMolecule
+from app.models import EditRequest, SimpleEditRequest, VisualMolecule
 from app.chemistry.molecule import VisualMoleculeBuilder, align_and_diff
 from app.chemistry.tools import ChemistryTools
 from app.chemistry.substructures import get_available_patterns, search_patterns
@@ -174,8 +175,10 @@ piperidine, piperazine, morpholine, trifluoromethyl, methoxy, cyano, isopropyl, 
 Use `search_patterns` if unsure of exact name.
 
 ## Rules
+- **Selection Sensitivity**: If the user has selected exactly ONE atom, that is your anchor for `add_substructure`. Do not pick a different atom unless the request explicitly says so.
 - Use atom IDs from the SMILES mapping or image labels.
 - For raw SMILES fragments, use proper notation: C(F)(F)F for trifluoromethyl, c1ccccc1 for benzene.
+- Shortcut names (e.g., 'phenyl') are preferred over SMILES when available.
 """
 
 
@@ -309,24 +312,37 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
                     result = json.dumps({"patterns": patterns})
 
                 elif fn_name == "modify_atom":
-                    new_mol = ChemistryTools.modify_atom(new_mol, args["atom_id"], args["new_element"])
+                    atom_id = args["atom_id"]
+                    if len(request.selected_indices) == 1:
+                        atom_id = request.selected_indices[0]
+                    new_mol = ChemistryTools.modify_atom(new_mol, atom_id, args["new_element"])
                     has_modified = True
                     result = "Success: Atom modified."
 
                 elif fn_name == "add_substructure":
                     print(f"DEBUG: Calling add_substructure")
-                    new_mol = ChemistryTools.add_substructure(new_mol, args["anchor_atom_id"], args["fragment"])
-                    print(f"DEBUG: add_substructure success")
+                    anchor_id = args["anchor_atom_id"]
+                    if len(request.selected_indices) == 1:
+                        anchor_id = request.selected_indices[0]
+                    
+                    new_mol = ChemistryTools.add_substructure(new_mol, anchor_id, args["fragment"], variant_idx=args.get("variant_idx", 0))
                     has_modified = True
                     result = "Success: Fragment added."
 
                 elif fn_name == "replace_substructure":
-                    new_mol = ChemistryTools.replace_substructure(new_mol, args["atom_ids"], args["fragment"])
+                    atom_ids = args["atom_ids"]
+                    if len(request.selected_indices) > 0:
+                        # Use selection if it overlaps or if it's the only things selected
+                        atom_ids = request.selected_indices
+                    new_mol = ChemistryTools.replace_substructure(new_mol, atom_ids, args["fragment"], variant_idx=args.get("variant_idx", 0))
                     has_modified = True
                     result = "Success: Substructure replaced."
 
                 elif fn_name == "remove_atoms":
-                    new_mol = ChemistryTools.remove_atoms(new_mol, args["atom_ids"])
+                    atom_ids = args["atom_ids"]
+                    if len(request.selected_indices) > 0:
+                        atom_ids = request.selected_indices
+                    new_mol = ChemistryTools.remove_atoms(new_mol, atom_ids)
                     has_modified = True
                     result = "Success: Atoms removed."
 
@@ -390,8 +406,7 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
 
         raise Exception("No changes proposed by AI.")
 
-    aligned_vis = align_and_diff(current_mol, new_mol)
-    final_vis = ChemistryTools.apply_diff_metadata(current_mol, new_mol, aligned_vis)
+    final_vis = align_and_diff(current_mol, new_mol)
 
     # Verify changes
     has_changes = any(a.diff_state != "EXISTING" for a in final_vis.atoms) or \
@@ -408,4 +423,58 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
         else:
              raise Exception("No visible changes in molecule.")
 
+    return final_vis
+async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
+    """
+    Directly execute tools without LLM interpretation.
+    Designed for buttons or high-confidence UI actions.
+    """
+    mol_block = request.current_molecule.mol_block
+    if not mol_block:
+        raise ValueError("No mol_block provided")
+
+    current_mol = Chem.MolFromMolBlock(mol_block)
+    if not current_mol:
+        raise ValueError("Failed to parse mol_block")
+
+    new_mol = current_mol
+    action = request.action
+    params = request.parameters
+    
+    try:
+        if action == "add_substructure":
+            anchor_id = params.get("anchor_atom_id")
+            if (anchor_id is None) and (len(request.selected_indices) == 1):
+                anchor_id = request.selected_indices[0]
+            
+            if anchor_id is None:
+                raise ValueError("No anchor atom specified for add_substructure")
+                
+            new_mol = ChemistryTools.add_substructure(current_mol, anchor_id, params["fragment"], variant_idx=params.get("variant_idx", 0))
+
+        elif action == "remove_atoms":
+            atom_ids = params.get("atom_ids") or request.selected_indices
+            if not atom_ids:
+                raise ValueError("No atoms specified for removal")
+            new_mol = ChemistryTools.remove_atoms(current_mol, atom_ids)
+
+        elif action == "modify_atom":
+            atom_id = params.get("atom_id")
+            if (atom_id is None) and (len(request.selected_indices) == 1):
+                atom_id = request.selected_indices[0]
+            new_mol = ChemistryTools.modify_atom(current_mol, atom_id, params["new_element"])
+            
+        elif action == "aromatize":
+            new_mol = ChemistryTools.aromatize(current_mol)
+        elif action == "dearomatize":
+            new_mol = ChemistryTools.dearomatize(current_mol)
+        else:
+            raise ValueError(f"Unknown simple action: {action}")
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # For simple edits, we still want the diff visualization
+    final_vis = align_and_diff(current_mol, new_mol)
+    
     return final_vis

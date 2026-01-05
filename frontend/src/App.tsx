@@ -11,6 +11,7 @@ function App() {
         error,
         loadInitial,
         requestEdit,
+        cycleVariant,
         acceptChange,
         rejectChange
     } = useMolecule();
@@ -23,20 +24,28 @@ function App() {
 
     const handleSendPrompt = async (prompt: string) => {
         const selectedIds = ketcherRef.current?.getSelectedAtoms() || [];
-        // Get live molecule from Ketcher to ensure we're editing what's displayed
         let liveMolfile = null;
         try {
             liveMolfile = await ketcherRef.current?.getMolfile();
-            if (!liveMolfile) {
-                 console.warn("Ketcher returned null molfile, falling back to state.");
-            } else {
-                 console.log("Got live molfile from Ketcher (length: " + liveMolfile.length + ")");
-            }
         } catch (e) {
             console.error("Error fetching live molfile:", e);
         }
-
         requestEdit(prompt, selectedIds, liveMolfile);
+    };
+
+    const handleAccept = () => {
+        const molBlock = acceptChange();
+        if (molBlock && ketcherRef.current) {
+            ketcherRef.current.setMolecule(molBlock);
+            ketcherRef.current.layout(); // Auto-clean layout on accept
+        }
+    };
+
+    const handleReject = () => {
+        const revertTo = rejectChange();
+        if (revertTo && ketcherRef.current) {
+            ketcherRef.current.setMolecule(revertTo);
+        }
     };
 
     return (
@@ -59,8 +68,9 @@ function App() {
                 {/* Diff Controls (Floating over editor) */}
                 {status === 'DIFFING' && (
                     <DiffActionBar
-                        onAccept={acceptChange}
-                        onReject={rejectChange}
+                        onAccept={handleAccept}
+                        onReject={handleReject}
+                        onCycle={cycleVariant}
                     />
                 )}
 
