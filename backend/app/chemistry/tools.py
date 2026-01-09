@@ -8,6 +8,27 @@ import copy
 
 class ChemistryTools:
     @staticmethod
+    def _resolve_atom_idx(mol: Chem.Mol, provided_id: int) -> int:
+        """
+        Attempts to find atom index by Persistent Map Number first.
+        Falls back to provided_id as direct index if within range.
+        """
+        # First try: Look for atom with matching map number
+        for atom in mol.GetAtoms():
+            if atom.GetAtomMapNum() == provided_id:
+                print(f"DEBUG: Resolved map {provided_id} -> idx {atom.GetIdx()}")
+                return atom.GetIdx()
+        
+        # Fallback: Use as direct index if valid
+        if provided_id < mol.GetNumAtoms():
+            print(f"DEBUG: Using direct index {provided_id}")
+            return provided_id
+        
+        # Last resort: Return 0 or raise
+        print(f"WARNING: Could not resolve atom {provided_id}, mol has {mol.GetNumAtoms()} atoms")
+        return min(provided_id, mol.GetNumAtoms() - 1) if mol.GetNumAtoms() > 0 else 0
+
+    @staticmethod
     def _get_fragment_and_attachment(smiles_or_name: str, variant_idx: int = 0) -> tuple[Chem.Mol, int]:
         """
         Helper to get RDKit mol and the index of the atom to attach.
@@ -143,7 +164,9 @@ class ChemistryTools:
         """
         Adds a fragment at a specific anchor point.
         """
-        rw_mol = Chem.RWMol(current_mol)
+        # Explicate Hs to ensure we can substitute them if needed
+        mol_with_hs = Chem.AddHs(current_mol)
+        rw_mol = Chem.RWMol(mol_with_hs)
         
         if anchor_atom_id >= rw_mol.GetNumAtoms():
              raise ValueError(f"Anchor atom ID {anchor_atom_id} is out of range.")
@@ -157,20 +180,24 @@ class ChemistryTools:
         anchor_atom = rw_mol.GetAtomWithIdx(anchor_atom_id)
         
         # Update property cache to get accurate H count
+        # Update property cache to get accurate H count
         rw_mol.UpdatePropertyCache(strict=False)
-        implicit_hs = anchor_atom.GetNumImplicitHs()
         
-        if implicit_hs == 0:
-            # Check explicit Hs
-            explicit_h_neighbors = [n for n in anchor_atom.GetNeighbors() if n.GetAtomicNum() == 1]
-            if explicit_h_neighbors:
-                # Remove one explicit H to make room
-                h_to_remove = explicit_h_neighbors[0].GetIdx()
-                rw_mol.RemoveAtom(h_to_remove)
-                # Adjust anchor_atom_id if needed
-                if h_to_remove < anchor_atom_id:
-                    anchor_atom_id -= 1
-            # If no Hs available, we'll try anyway and let sanitization catch errors
+        # Since we added Hs, we only check explicit neighbors
+        explicit_h_neighbors = [n for n in anchor_atom.GetNeighbors() if n.GetAtomicNum() == 1]
+        
+        # If we need to make room (valence check would happen here in reality, 
+        # but for now we opportunistically remove H if one exists and we are attaching something)
+        if explicit_h_neighbors:
+            # Remove one explicit H to make room
+            h_to_remove = explicit_h_neighbors[0].GetIdx()
+            rw_mol.RemoveAtom(h_to_remove)
+            
+            # Since we removed an atom, indices might shift if the removed atom had a lower index
+            # But AddHs usually adds Hs at the end, so anchor_atom_id (original atom) should be safe.
+            # However, if we remove an atom < anchor_atom_id, we must adjust.
+            if h_to_remove < anchor_atom_id:
+                anchor_atom_id -= 1
             
         # Add fragment atoms
         frag_idx_map = {}
@@ -197,11 +224,13 @@ class ChemistryTools:
         try:
             rw_mol.UpdatePropertyCache(strict=False)
             Chem.SanitizeMol(rw_mol)
-            AllChem.Compute2DCoords(rw_mol)
+            # Remove explicit Hs (clean up)
+            final_mol = Chem.RemoveHs(rw_mol.GetMol())
+            AllChem.Compute2DCoords(final_mol)
         except Exception as e:
             raise ValueError(f"Adding substructure failed: {str(e)}")
 
-        return rw_mol.GetMol()
+        return final_mol
 
     @staticmethod
     def replace_substructure(current_mol: Chem.Mol, atom_ids: list[int], smiles_fragment: str, variant_idx: int = 0) -> Chem.Mol:
@@ -210,61 +239,62 @@ class ChemistryTools:
         """
         rw_mol = Chem.RWMol(current_mol)
         atoms_to_remove = set(atom_ids)
-        attachment_point = -1
-
-        # Find an attachment point (neighbor of the substructure)
+        
+        # 1. Identify all boundary bonds (one atom in remove_set, one not)
+        # Store as (neighbor_index, bond_type)
+        boundary_connections = []
         for atom_id in atom_ids:
             if atom_id >= rw_mol.GetNumAtoms(): continue
             atom = rw_mol.GetAtomWithIdx(atom_id)
             for neighbor in atom.GetNeighbors():
                 n_idx = neighbor.GetIdx()
                 if n_idx not in atoms_to_remove:
-                    attachment_point = n_idx
-                    break
-            if attachment_point != -1:
-                break
+                    bond = rw_mol.GetBondBetweenAtoms(atom_id, n_idx)
+                    boundary_connections.append((n_idx, bond.GetBondType()))
 
-        # Remove atoms
+        # 2. Remove atoms
         sorted_ids = sorted(atom_ids, reverse=True)
         for atom_id in sorted_ids:
             if atom_id >= rw_mol.GetNumAtoms():
                  raise ValueError(f"Atom ID {atom_id} is out of range.")
             rw_mol.RemoveAtom(atom_id)
 
-        # Adjust attachment_point index
-        current_attachment = attachment_point
-        if current_attachment != -1:
-            for atom_id in sorted_ids:
-                if atom_id < current_attachment:
-                    current_attachment -= 1
-                elif atom_id == current_attachment:
-                    current_attachment = -1
+        # 3. Adjust boundary connection indices (since atoms were removed)
+        adjusted_connections = []
+        for n_idx, b_type in boundary_connections:
+            new_n_idx = n_idx
+            for removed_id in sorted_ids:
+                if removed_id < n_idx:
+                    new_n_idx -= 1
+                elif removed_id == n_idx:
+                    # Neighbor was also removed? Should be impossible due to check above
+                    new_n_idx = -1
                     break
+            if new_n_idx != -1:
+                adjusted_connections.append((new_n_idx, b_type))
 
-        # Add fragment
-        if current_attachment != -1:
-            fragment, frag_attach_idx = ChemistryTools._get_fragment_and_attachment(smiles_fragment, variant_idx)
-            if fragment and frag_attach_idx != -1:
-                frag_idx_map = {}
-                for atom in fragment.GetAtoms():
-                    new_idx = rw_mol.AddAtom(atom)
-                    frag_idx_map[atom.GetIdx()] = new_idx
+        # 4. Add new fragment
+        fragment, frag_attach_idx = ChemistryTools._get_fragment_and_attachment(smiles_fragment, variant_idx)
+        if not fragment:
+            raise ValueError(f"Failed to parse or find fragment: {smiles_fragment}")
+            
+        frag_idx_map = {}
+        for atom in fragment.GetAtoms():
+            new_idx = rw_mol.AddAtom(atom)
+            frag_idx_map[atom.GetIdx()] = new_idx
 
-                for bond in fragment.GetBonds():
-                    rw_mol.AddBond(
-                        frag_idx_map[bond.GetBeginAtomIdx()],
-                        frag_idx_map[bond.GetEndAtomIdx()],
-                        bond.GetBondType()
-                    )
+        for bond in fragment.GetBonds():
+            rw_mol.AddBond(
+                frag_idx_map[bond.GetBeginAtomIdx()],
+                frag_idx_map[bond.GetEndAtomIdx()],
+                bond.GetBondType()
+            )
 
-                # Attach
-                rw_mol.AddBond(
-                    current_attachment,
-                    frag_idx_map[frag_attach_idx],
-                    Chem.BondType.SINGLE
-                )
-            elif not fragment:
-                raise ValueError(f"Failed to parse or find fragment: {smiles_fragment}")
+        # 5. Reconnect adjusted boundary connections to the new fragment's attachment index
+        if frag_attach_idx != -1:
+            new_frag_attach_idx = frag_idx_map[frag_attach_idx]
+            for n_idx, b_type in adjusted_connections:
+                rw_mol.AddBond(n_idx, new_frag_attach_idx, b_type)
 
         try:
             rw_mol.UpdatePropertyCache(strict=False)
@@ -279,12 +309,14 @@ class ChemistryTools:
     @staticmethod
     def get_mapped_smiles(mol: Chem.Mol) -> str:
         """
-        Returns SMILES with atom indices mapped.
+        Returns SMILES with atom indices mapped using persistent map numbers.
         """
         # Create a copy to not modify original properties
         m = Chem.Mol(mol)
         for atom in m.GetAtoms():
-            atom.SetAtomMapNum(atom.GetIdx())
+            # If for some reason map number is missing, fallback to 1-based index
+            if atom.GetAtomMapNum() == 0:
+                atom.SetAtomMapNum(atom.GetIdx() + 1)
         return Chem.MolToSmiles(m)
 
     @staticmethod

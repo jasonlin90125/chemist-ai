@@ -175,8 +175,8 @@ piperidine, piperazine, morpholine, trifluoromethyl, methoxy, cyano, isopropyl, 
 Use `search_patterns` if unsure of exact name.
 
 ## Rules
-- **Selection Sensitivity**: If the user has selected exactly ONE atom, that is your anchor for `add_substructure`. Do not pick a different atom unless the request explicitly says so.
-- Use atom IDs from the SMILES mapping or image labels.
+- **Selection Sensitivity**: If the user has selected exactly ONE atom, that is your anchor. Use the atom's Map Number (shown in SMILES context like [C:5]) rather than its list index.
+- Use atom IDs from the SMILES mapping or image labels. The numbers in [Symbol:N] are the Map Numbers you should use for tool calls.
 - For raw SMILES fragments, use proper notation: C(F)(F)F for trifluoromethyl, c1ccccc1 for benzene.
 - Shortcut names (e.g., 'phenyl') are preferred over SMILES when available.
 """
@@ -189,8 +189,10 @@ def generate_molecule_image(mol: Chem.Mol) -> str:
         AllChem.Compute2DCoords(mol)
 
         for atom in mol.GetAtoms():
-            label = f"{atom.GetSymbol()}{atom.GetIdx()}"
-            atom.SetProp("atomNote", label)
+            # No labels for user, but AI needs them? 
+            # Actually, user said "Can you not show the user the atom indices?"
+            # If the user is somehow seeing this image, let's remove labels.
+            pass
 
         drawer = Draw.MolDraw2DCairo(600, 500)
         opts = drawer.drawOptions()
@@ -220,7 +222,7 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
     if not mol_block:
         raise ValueError("No mol_block provided in request")
 
-    current_mol = Chem.MolFromMolBlock(mol_block)
+    current_mol = Chem.MolFromMolBlock(mol_block, removeHs=False)
     if not current_mol:
         raise ValueError("Failed to parse mol_block")
 
@@ -312,7 +314,7 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
                     result = json.dumps({"patterns": patterns})
 
                 elif fn_name == "modify_atom":
-                    atom_id = args["atom_id"]
+                    atom_id = ChemistryTools._resolve_atom_idx(new_mol, args["atom_id"])
                     if len(request.selected_indices) == 1:
                         atom_id = request.selected_indices[0]
                     new_mol = ChemistryTools.modify_atom(new_mol, atom_id, args["new_element"])
@@ -321,8 +323,11 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
 
                 elif fn_name == "add_substructure":
                     print(f"DEBUG: Calling add_substructure")
-                    anchor_id = args["anchor_atom_id"]
-                    if len(request.selected_indices) == 1:
+                    anchor_id = ChemistryTools._resolve_atom_idx(new_mol, args["anchor_atom_id"])
+                    
+                    if len(request.selected_maps) == 1:
+                        anchor_id = ChemistryTools._resolve_atom_idx(new_mol, request.selected_maps[0])
+                    elif len(request.selected_indices) == 1:
                         anchor_id = request.selected_indices[0]
                     
                     new_mol = ChemistryTools.add_substructure(new_mol, anchor_id, args["fragment"], variant_idx=args.get("variant_idx", 0))
@@ -330,18 +335,25 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
                     result = "Success: Fragment added."
 
                 elif fn_name == "replace_substructure":
-                    atom_ids = args["atom_ids"]
-                    if len(request.selected_indices) > 0:
-                        # Use selection if it overlaps or if it's the only things selected
+                    atom_ids = [ChemistryTools._resolve_atom_idx(new_mol, aid) for aid in args["atom_ids"]]
+                    
+                    if request.selected_maps:
+                        atom_ids = [ChemistryTools._resolve_atom_idx(new_mol, m) for m in request.selected_maps]
+                    elif request.selected_indices:
                         atom_ids = request.selected_indices
+                        
                     new_mol = ChemistryTools.replace_substructure(new_mol, atom_ids, args["fragment"], variant_idx=args.get("variant_idx", 0))
                     has_modified = True
                     result = "Success: Substructure replaced."
 
                 elif fn_name == "remove_atoms":
-                    atom_ids = args["atom_ids"]
-                    if len(request.selected_indices) > 0:
+                    atom_ids = [ChemistryTools._resolve_atom_idx(new_mol, aid) for aid in args["atom_ids"]]
+                    
+                    if request.selected_maps:
+                        atom_ids = [ChemistryTools._resolve_atom_idx(new_mol, m) for m in request.selected_maps]
+                    elif request.selected_indices:
                         atom_ids = request.selected_indices
+                        
                     new_mol = ChemistryTools.remove_atoms(new_mol, atom_ids)
                     has_modified = True
                     result = "Success: Atoms removed."
@@ -433,7 +445,7 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
     if not mol_block:
         raise ValueError("No mol_block provided")
 
-    current_mol = Chem.MolFromMolBlock(mol_block)
+    current_mol = Chem.MolFromMolBlock(mol_block, removeHs=False)
     if not current_mol:
         raise ValueError("Failed to parse mol_block")
 
@@ -444,7 +456,8 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
     try:
         if action == "add_substructure":
             anchor_id = params.get("anchor_atom_id")
-            if (anchor_id is None) and (len(request.selected_indices) == 1):
+            
+            if anchor_id is None and request.selected_indices:
                 anchor_id = request.selected_indices[0]
             
             if anchor_id is None:
@@ -453,7 +466,7 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
             new_mol = ChemistryTools.add_substructure(current_mol, anchor_id, params["fragment"], variant_idx=params.get("variant_idx", 0))
 
         elif action == "remove_atoms":
-            atom_ids = params.get("atom_ids") or request.selected_indices
+            atom_ids = request.selected_indices or params.get("atom_ids")
             if not atom_ids:
                 raise ValueError("No atoms specified for removal")
             new_mol = ChemistryTools.remove_atoms(current_mol, atom_ids)
@@ -464,6 +477,12 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
                 atom_id = request.selected_indices[0]
             new_mol = ChemistryTools.modify_atom(current_mol, atom_id, params["new_element"])
             
+        elif action == "replace_substructure":
+            atom_ids = request.selected_indices or params.get("atom_ids")
+            if not atom_ids:
+                raise ValueError("No atoms specified for replacement")
+            new_mol = ChemistryTools.replace_substructure(current_mol, atom_ids, params["fragment"], variant_idx=params.get("variant_idx", 0))
+
         elif action == "aromatize":
             new_mol = ChemistryTools.aromatize(current_mol)
         elif action == "dearomatize":
@@ -478,3 +497,80 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
     final_vis = align_and_diff(current_mol, new_mol)
     
     return final_vis
+
+async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]:
+    """
+    Directly execute tools but for ALL unique symmetry variants.
+    Used for pre-calculating options for the user.
+    """
+    mol_block = request.current_molecule.mol_block
+    if not mol_block:
+        raise HTTPException(status_code=400, detail="No mol_block provided")
+
+    current_mol = Chem.MolFromMolBlock(mol_block, removeHs=False)
+    if not current_mol:
+        raise HTTPException(status_code=400, detail="Failed to parse mol_block")
+
+    action = request.action
+    params = request.parameters
+    
+    # Resolve anchor using selected_maps FIRST for robustness
+    anchor_id = None
+    if action == "add_substructure":
+        if request.selected_maps:
+             # Look up by map number in the current_mol
+             anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_maps[0])
+             print(f"DEBUG: Resolved anchor via Map {request.selected_maps[0]} -> Index {anchor_id}")
+        elif request.selected_indices:
+             anchor_id = request.selected_indices[0]
+             print(f"DEBUG: Using direct index {anchor_id} as fallback")
+        
+        if anchor_id is None:
+            raise HTTPException(status_code=400, detail="No anchor atom specified. Please select an atom first.")
+        
+        if anchor_id >= current_mol.GetNumAtoms():
+            raise HTTPException(status_code=400, detail=f"Selection out of range. Please try de-selecting and re-selecting.")
+
+    proposals = []
+    seen_smiles = set()
+    first_error = None
+    
+    # Try up to 20 variants to find all unique ones
+    for v_idx in range(20):
+        try:
+            new_mol = None
+            if action == "add_substructure":
+                new_mol = ChemistryTools.add_substructure(current_mol, anchor_id, params["fragment"], variant_idx=v_idx)
+            
+            elif action == "replace_substructure":
+                atom_ids = request.selected_indices
+                if request.selected_maps:
+                    atom_ids = [ChemistryTools._resolve_atom_idx(current_mol, m) for m in request.selected_maps]
+                if not atom_ids: break
+                new_mol = ChemistryTools.replace_substructure(current_mol, atom_ids, params["fragment"], variant_idx=v_idx)
+            
+            else:
+                # Other actions don't support variants yet
+                if v_idx == 0:
+                    result = await process_simple_edit(request)
+                    return [result]
+                break
+
+            if new_mol:
+                smiles = Chem.MolToSmiles(new_mol)
+                if smiles not in seen_smiles:
+                    seen_smiles.add(smiles)
+                    proposals.append(align_and_diff(current_mol, new_mol))
+                else:
+                    # Deduplicated - continue to find other unique variants
+                    continue
+        except Exception as e:
+            if first_error is None:
+                first_error = str(e)
+            break
+            
+    if not proposals:
+        error_msg = first_error or "No valid proposals generated."
+        raise HTTPException(status_code=400, detail=error_msg)
+        
+    return proposals

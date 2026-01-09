@@ -1,13 +1,21 @@
-import { Check, X, ChevronLeft, ChevronRight, Hash } from 'lucide-react';
+import { Check, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEffect } from 'react';
 
 interface DiffActionBarProps {
     onAccept: () => void;
     onReject: () => void;
     onCycle: (direction: number) => void;
+    proposalsCount?: number;
+    currentProposalIdx?: number;
 }
 
-export const DiffActionBar = ({ onAccept, onReject, onCycle }: DiffActionBarProps) => {
+export const DiffActionBar = ({
+    onAccept,
+    onReject,
+    onCycle,
+    proposalsCount = 0,
+    currentProposalIdx = 0
+}: DiffActionBarProps) => {
 
     // Keyboard shortucts
     useEffect(() => {
@@ -34,27 +42,30 @@ export const DiffActionBar = ({ onAccept, onReject, onCycle }: DiffActionBarProp
                 Reject
             </button>
 
-            <div className="w-px h-6 bg-white/20"></div>
-
-            <div className="flex items-center gap-1">
-                <button
-                    onClick={() => onCycle(-1)}
-                    className="p-1.5 rounded-full hover:bg-white/10 text-white/80 transition-colors"
-                    title="Previous Variant (Up Arrow)"
-                >
-                    <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span className="text-white/40"><Hash className="w-3 h-3" /></span>
-                <button
-                    onClick={() => onCycle(1)}
-                    className="p-1.5 rounded-full hover:bg-white/10 text-white/80 transition-colors"
-                    title="Next Variant (Down Arrow)"
-                >
-                    <ChevronRight className="w-4 h-4" />
-                </button>
-            </div>
-
-            <div className="w-px h-6 bg-white/20"></div>
+            {proposalsCount > 1 && (
+                <>
+                    <div className="w-px h-6 bg-white/20"></div>
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={() => onCycle(-1)}
+                            className="p-1.5 rounded-full hover:bg-white/10 text-white/80 transition-colors"
+                            title="Previous Variant (Up Arrow)"
+                        >
+                            <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <span className="text-white/60 text-xs font-mono min-w-[3rem] text-center">
+                            {currentProposalIdx + 1} of {proposalsCount}
+                        </span>
+                        <button
+                            onClick={() => onCycle(1)}
+                            className="p-1.5 rounded-full hover:bg-white/10 text-white/80 transition-colors"
+                            title="Next Variant (Down Arrow)"
+                        >
+                            <ChevronRight className="w-4 h-4" />
+                        </button>
+                    </div>
+                </>
+            )}
 
             <button
                 onClick={onAccept}

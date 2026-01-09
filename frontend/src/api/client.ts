@@ -19,5 +19,10 @@ export const moleculeApi = {
     simpleEdit: async (req: SimpleEditRequest): Promise<VisualMolecule> => {
         const res = await api.post('/molecule/simple-edit', req);
         return res.data;
+    },
+
+    multiEdit: async (req: SimpleEditRequest): Promise<VisualMolecule[]> => {
+        const res = await api.post('/molecule/multi-edit', req);
+        return res.data;
     }
 };

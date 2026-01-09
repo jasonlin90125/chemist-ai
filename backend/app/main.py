@@ -2,13 +2,20 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.models import VisualMolecule, EditRequest, SimpleEditRequest
 from app.chemistry.molecule import get_ibrutinib
-from app.ai.agent import process_molecule_edit, process_simple_edit
+from app.ai.agent import process_molecule_edit, process_simple_edit, process_multi_edit
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI(title="Chemist.ai Backend")
+
+@app.post("/api/molecule/multi-edit", response_model=list[VisualMolecule])
+async def multi_edit_molecule(request: SimpleEditRequest):
+    """
+    Pre-calculate all unique symmetry variants for a simple edit.
+    """
+    return await process_multi_edit(request)
 
 app.add_middleware(
     CORSMiddleware,

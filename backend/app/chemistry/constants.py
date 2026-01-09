@@ -77,4 +77,5 @@ FUNCTIONAL_GROUPS = {
     "bicyclo_111_pentane": "*C12CC(C1)C2",  # Phenyl bioisostere
     "spiro_33_heptane": "*C12CCC(C1)C2",
     "cubane": "*C12C3C4C1C5C2C3C45",
+    "methyl": "*C",
 }

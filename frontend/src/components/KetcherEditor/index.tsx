@@ -24,6 +24,7 @@ interface Ketcher {
 export interface KetcherEditorRef {
     getSelectedAtoms: () => number[];
     getMolfile: () => Promise<string | null>;
+    getSmiles: () => Promise<string | null>;
     setMolecule: (molBlock: string) => void;
     layout: () => void;
 }
@@ -38,6 +39,7 @@ const structServiceProvider = new StandaloneStructServiceProvider();
 export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
     ({ molecule, onInit }, ref) => {
         const ketcherRef = useRef<Ketcher | null>(null);
+        const lastMoleculeId = useRef<string | null>(null);
 
         useImperativeHandle(ref, () => ({
             getSelectedAtoms: () => {
@@ -55,9 +57,20 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
                     return null;
                 }
             },
+            getSmiles: async () => {
+                if (!ketcherRef.current) return null;
+                try {
+                    return await ketcherRef.current.getSmiles();
+                } catch (e) {
+                    console.error("Failed to get SMILES:", e);
+                    return null;
+                }
+            },
             setMolecule: (molBlock: string) => {
                 if (ketcherRef.current) {
-                    ketcherRef.current.setMolecule(molBlock);
+                    ketcherRef.current.setMolecule(molBlock).then(() => {
+                        ketcherRef.current?.layout();
+                    });
                 }
             },
             layout: () => {
@@ -121,13 +134,18 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
         // React to molecule updates from AI
         useEffect(() => {
             if (ketcherRef.current && molecule?.mol_block) {
-                ketcherRef.current.setMolecule(molecule.mol_block).then(() => {
-                    if (ketcherRef.current) {
-                        applySelections(ketcherRef.current, molecule);
-                    }
-                });
+                // Ensure we don't reload the same mol_block repeatedly
+                if (molecule.molecule_id !== lastMoleculeId.current) {
+                    lastMoleculeId.current = molecule.molecule_id;
+                    ketcherRef.current.setMolecule(molecule.mol_block).then(() => {
+                        if (ketcherRef.current) {
+                            ketcherRef.current.layout();
+                            applySelections(ketcherRef.current, molecule);
+                        }
+                    });
+                }
             }
-        }, [molecule]);
+        }, [molecule, molecule?.mol_block]);
 
         return (
             <div className="w-full h-full relative">

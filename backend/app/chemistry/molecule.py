@@ -1,5 +1,6 @@
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdFMCS
+from rdkit.Chem.Draw import rdMolDraw2D
 from app.models import VisualMolecule, Atom, Bond
 import uuid
 
@@ -12,10 +13,24 @@ class VisualMoleculeBuilder:
         atoms = []
         conf = mol.GetConformer()
         
+        # 1. Collect existing map numbers to avoid collisions
+        existing_maps = {atom.GetAtomMapNum() for atom in mol.GetAtoms() if atom.GetAtomMapNum() > 0}
+        next_map = max(existing_maps) + 1 if existing_maps else 1
+
         for atom in mol.GetAtoms():
             idx = atom.GetIdx()
             pos = conf.GetAtomPosition(idx)
             
+            # Ensure we have a persistent atom map number
+            map_num = atom.GetAtomMapNum()
+            if map_num == 0:
+                while next_map in existing_maps:
+                    next_map += 1
+                map_num = next_map
+                atom.SetAtomMapNum(map_num)
+                existing_maps.add(map_num)
+                next_map += 1
+
             # Use diff_map if provided, else default to EXISTING
             diff_state = diff_map.get(idx, "EXISTING") if diff_map else "EXISTING"
             
@@ -26,6 +41,7 @@ class VisualMoleculeBuilder:
                 y=pos.y,
                 charge=atom.GetFormalCharge(),
                 implicit_h=atom.GetTotalNumHs(),
+                atom_map=map_num,
                 ui_state="DEFAULT",
                 diff_state=diff_state
             ))
@@ -54,15 +70,36 @@ class VisualMoleculeBuilder:
             ))
             
         try:
+            # Force V3000 to preserve atom map numbers and coordinates accurately
             mol_block = Chem.MolToMolBlock(mol, forceV3000=True)
         except:
             mol_block = None
+
+        # Generate SVG for visual preview
+        try:
+            # Create a copy and STRIP map numbers for user display
+            mc = Chem.Mol(mol)
+            for a in mc.GetAtoms():
+                a.SetAtomMapNum(0)
+                
+            AllChem.Compute2DCoords(mc)
+            drawer = rdMolDraw2D.MolDraw2DSVG(200, 150)
+            options = drawer.drawOptions()
+            options.padding = 0.1
+            options.addAtomIndices = False
+            drawer.DrawMolecule(mc)
+            drawer.FinishDrawing()
+            svg = drawer.GetDrawingText()
+        except:
+            svg = None
             
         return VisualMolecule(
             molecule_id=mol_id,
             atoms=atoms,
             bonds=bonds,
-            mol_block=mol_block
+            mol_block=mol_block,
+            smiles=Chem.MolToSmiles(mol),
+            svg=svg
         )
 
     @staticmethod
