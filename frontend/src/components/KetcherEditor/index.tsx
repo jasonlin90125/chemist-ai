@@ -1,4 +1,4 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
 import { Editor } from 'ketcher-react';
 import { StandaloneStructServiceProvider } from 'ketcher-standalone';
 import 'ketcher-react/dist/index.css';
@@ -40,6 +40,7 @@ const structServiceProvider = new StandaloneStructServiceProvider();
 
 export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
     ({ molecule, lastSelection = [], onInit }, ref) => {
+        const [ketcherInstance, setKetcherInstance] = useState<Ketcher | null>(null);
         const ketcherRef = useRef<Ketcher | null>(null);
         const lastMoleculeId = useRef<string | null>(null);
 
@@ -84,6 +85,10 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
             // Give Ketcher a moment to finish rendering the molecule
             setTimeout(() => {
                 try {
+                    // Prioritize atoms explicitly marked in the molecule data (Added/Selected).
+                    // If the molecule has added or selected atoms (e.g. from an AI edit), 
+                    // we only highlight those to focus on the changes.
+                    // We only fallback to lastSelection if no structural highlights are provided.
                     const selectedAtomsFromMolecule = mol.atoms
                         .filter(a => a.ui_state === "SELECTED")
                         .map(a => a.id);
@@ -92,12 +97,14 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
                         .filter(a => a.diff_state === "ADDED")
                         .map(a => a.id);
 
-                    // Merge AI-added atoms with the user's last selection to preserve context
-                    const finalAtomSelection = [...new Set([
+                    let finalAtomSelection = [...new Set([
                         ...selectedAtomsFromMolecule,
-                        ...addedAtoms,
-                        ...lastSelection
+                        ...addedAtoms
                     ])];
+
+                    if (finalAtomSelection.length === 0 && lastSelection.length > 0) {
+                        finalAtomSelection = [...lastSelection];
+                    }
 
                     // Filter selection to only include atoms that actually exist in current structure
                     const existingAtomIds = new Set(mol.atoms.map(a => a.id));
@@ -126,32 +133,66 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
 
         const handleInit = (ketcher: any) => {
             ketcherRef.current = ketcher;
+            setKetcherInstance(ketcher);
             window.ketcher = ketcher; // For debugging
 
-            // Hide atom IDs from the user - they're for internal use only
+            // Branding and UI customization for Ketcher
             try {
                 ketcher.editor.setOptions(JSON.stringify({
                     showAtomIds: false
                 }));
+
+                // MONKEY-PATCH: Fix atom selection alignment bug within the chemist-ai project.
+                // We delay the patch until the first molecule is loaded to safely access the ReAtom prototype.
+                const originalSetMolecule = ketcher.setMolecule.bind(ketcher);
+                ketcher.setMolecule = async (molString: string) => {
+                    const result = await originalSetMolecule(molString);
+
+                    try {
+                        const ctab = ketcher.editor.render.ctab;
+                        if (ctab && ctab.atoms && ctab.atoms.size > 0) {
+                            const firstAtom = ctab.atoms.values().next().value;
+                            const proto = Object.getPrototypeOf(firstAtom);
+
+                            if (proto && !proto._patchedForApotheca) {
+                                proto._patchedForApotheca = true;
+                                proto.getLabeledSelectionContour = function (render: any, highlightPadding = 0) {
+                                    const { paper, options } = render;
+                                    const { fontszInPx, radiusScaleFactor, microModeScale } = options;
+                                    const padding = fontszInPx * radiusScaleFactor + highlightPadding;
+                                    const radius = fontszInPx * radiusScaleFactor * 2 + highlightPadding;
+
+                                    // FIX: Use the atom's actual canvas position as the anchor
+                                    const ps = this.a.pp.scaled(microModeScale);
+
+                                    const box = this.getVBoxObj(render)!;
+                                    const ps1 = box.p0.scaled(microModeScale);
+                                    const ps2 = box.p1.scaled(microModeScale);
+
+                                    const width = Math.max(ps2.x - ps1.x, fontszInPx * 0.8);
+                                    const height = fontszInPx * 1.25;
+
+                                    return paper.rect(
+                                        ps.x - width / 2 - padding,
+                                        ps.y - height / 2 - padding,
+                                        width + padding * 2,
+                                        height + padding * 2,
+                                        radius,
+                                    );
+                                };
+                            }
+                        }
+                    } catch (err) {
+                        console.warn("Apotheca: Failed to apply rendering patch", err);
+                    }
+                    return result;
+                };
             } catch (e) {
-                console.warn("Failed to set Ketcher options:", e);
+                console.warn("Failed to set Ketcher options or prepare patch:", e);
             }
 
             if (onInit) {
                 onInit(ketcher);
-            }
-
-            // Initial load - add small delay to ensure Ketcher engine is ready
-            if (molecule?.mol_block) {
-                setTimeout(() => {
-                    try {
-                        ketcher.setMolecule(molecule.mol_block).then(() => {
-                            applySelections(ketcher, molecule);
-                        });
-                    } catch (e) {
-                        console.error("Initial setMolecule failed:", e);
-                    }
-                }, 200);
             }
         };
 
@@ -201,17 +242,15 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
 
         // React to molecule updates from AI
         useEffect(() => {
-            if (ketcherRef.current && molecule?.mol_block) {
+            if (ketcherInstance && molecule?.mol_block) {
                 if (molecule.molecule_id !== lastMoleculeId.current) {
                     lastMoleculeId.current = molecule.molecule_id;
-                    ketcherRef.current.setMolecule(molecule.mol_block).then(() => {
-                        if (ketcherRef.current) {
-                            applySelections(ketcherRef.current, molecule);
-                        }
+                    ketcherInstance.setMolecule(molecule.mol_block).then(() => {
+                        applySelections(ketcherInstance, molecule);
                     });
                 }
             }
-        }, [molecule, molecule?.mol_block]);
+        }, [molecule, ketcherInstance]);
 
         return (
             <div className="w-full h-full relative">
