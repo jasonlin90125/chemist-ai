@@ -69,10 +69,12 @@ class VisualMoleculeBuilder:
                 diff_state=bond_diff
             ))
             
+        # 3. Create a version for the UI that keeps map numbers (needed for targeting reliability)
         try:
-            # Force V3000 to preserve atom map numbers and coordinates accurately
+            # Use V3000 to ensure we don't truncate high indices and keep coords exact.
             mol_block = Chem.MolToMolBlock(mol, forceV3000=True)
-        except:
+        except Exception as e:
+            print(f"Error generating mol_block: {e}")
             mol_block = None
 
         # Generate SVG for visual preview
@@ -103,6 +105,55 @@ class VisualMoleculeBuilder:
         )
 
     @staticmethod
+    def reconstruct_molecule(visual_mol: VisualMolecule) -> Chem.Mol:
+        """
+        Reconstructs an RDKit molecule from the editor's MolBlock,
+        then uses geometric proximity to restore persistent map numbers from the 
+        VisualMolecule data. This is robust against index shifts caused by manual edits.
+        """
+        if not visual_mol.mol_block:
+             return VisualMoleculeBuilder.visual_json_to_mol(visual_mol)
+             
+        mol = Chem.MolFromMolBlock(visual_mol.mol_block, removeHs=False)
+        if not mol:
+             return VisualMoleculeBuilder.visual_json_to_mol(visual_mol)
+
+        # Build a lookup of (rounded_x, rounded_y) -> map_num from the persistent data
+        # We use a small epsilon for coordinate matching
+        coord_map = {}
+        for atom_data in visual_mol.atoms:
+            if atom_data.atom_map:
+                # Round to 3 decimal places to handle floating point noise
+                key = (round(atom_data.x, 3), round(atom_data.y, 3))
+                coord_map[key] = atom_data.atom_map
+
+        # Apply maps to the new RDKit molecule founded on geometry
+        conf = mol.GetConformer()
+        for atom in mol.GetAtoms():
+            # If map is already there (e.g. from V3000 AAM), keep it but still check for consistency
+            if atom.GetAtomMapNum() > 0:
+                 continue
+                 
+            # Fallback: geometric match for maps lost during manual edits or reconstruction
+            pos = conf.GetAtomPosition(atom.GetIdx())
+            key = (round(pos.x, 3), round(pos.y, 3))
+            
+            if key in coord_map:
+                atom.SetAtomMapNum(coord_map[key])
+            else:
+                best_map = None
+                best_dist = 0.015
+                for (cx, cy), m_num in coord_map.items():
+                    dist = ((pos.x - cx)**2 + (pos.y - cy)**2)**0.5
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_map = m_num
+                if best_map:
+                    atom.SetAtomMapNum(best_map)
+
+        return mol
+
+    @staticmethod
     def visual_json_to_mol(visual_mol: VisualMolecule) -> Chem.Mol:
         # Create an editable molecule
         rw_mol = Chem.RWMol()
@@ -115,8 +166,16 @@ class VisualMoleculeBuilder:
         for atom_data in sorted_atoms:
             a = Chem.Atom(atom_data.element)
             a.SetFormalCharge(atom_data.charge)
+            if atom_data.atom_map:
+                a.SetAtomMapNum(atom_data.atom_map)
             idx = rw_mol.AddAtom(a)
             atom_map[atom_data.id] = idx
+            
+        # Add coordinates to conformer
+        conf = Chem.Conformer(len(sorted_atoms))
+        for atom_data in sorted_atoms:
+            conf.SetAtomPosition(atom_map[atom_data.id], (atom_data.x, atom_data.y, 0.0))
+        rw_mol.AddConformer(conf)
             
         # Add bonds
         for bond in visual_mol.bonds:

@@ -5,28 +5,25 @@ from app.chemistry.constants import FUNCTIONAL_GROUPS
 from app.chemistry.substructures import SUBSTRUCTURE_PATTERNS
 from app.models import VisualMolecule
 import copy
+from typing import Optional, Union, List, Tuple
 
 class ChemistryTools:
     @staticmethod
-    def _resolve_atom_idx(mol: Chem.Mol, provided_id: int) -> int:
+    def _resolve_atom_idx(mol: Chem.Mol, provided_id: int, look_for_map: bool = True) -> Optional[int]:
         """
-        Attempts to find atom index by Persistent Map Number first.
-        Falls back to provided_id as direct index if within range.
+        Resolves an atom ID to its current RDKit index.
+        If look_for_map is True, treats provided_id as a Persistent Map Number.
+        Otherwise, treats it as a direct index and validates range.
         """
-        # First try: Look for atom with matching map number
-        for atom in mol.GetAtoms():
-            if atom.GetAtomMapNum() == provided_id:
-                print(f"DEBUG: Resolved map {provided_id} -> idx {atom.GetIdx()}")
-                return atom.GetIdx()
-        
-        # Fallback: Use as direct index if valid
-        if provided_id < mol.GetNumAtoms():
-            print(f"DEBUG: Using direct index {provided_id}")
-            return provided_id
-        
-        # Last resort: Return 0 or raise
-        print(f"WARNING: Could not resolve atom {provided_id}, mol has {mol.GetNumAtoms()} atoms")
-        return min(provided_id, mol.GetNumAtoms() - 1) if mol.GetNumAtoms() > 0 else 0
+        if look_for_map:
+            for atom in mol.GetAtoms():
+                if atom.GetAtomMapNum() == provided_id:
+                    return atom.GetIdx()
+            return None
+        else:
+            if provided_id is not None and provided_id >= 0 and provided_id < mol.GetNumAtoms():
+                return provided_id
+            return None
 
     @staticmethod
     def _get_fragment_and_attachment(smiles_or_name: str, variant_idx: int = 0) -> tuple[Chem.Mol, int]:
@@ -89,6 +86,35 @@ class ChemistryTools:
         attachment_idx = unique_atom_indices[variant_idx % len(unique_atom_indices)]
         
         return mol, attachment_idx
+
+    @staticmethod
+    def get_variants_count(smiles_or_name: str) -> int:
+        """
+        Returns the number of symmetry-unique attachment points for a fragment.
+        """
+        query = smiles_or_name.lower()
+        smiles = FUNCTIONAL_GROUPS.get(query)
+        if not smiles:
+            smiles = SUBSTRUCTURE_PATTERNS.get(query, smiles_or_name)
+        
+        mol = Chem.MolFromSmiles(smiles)
+        if not mol:
+            mol = Chem.MolFromSmiles(smiles.capitalize())
+            if not mol: return 1
+            
+        dummy_idx = -1
+        for atom in mol.GetAtoms():
+            if atom.GetAtomicNum() == 0:
+                dummy_idx = atom.GetIdx()
+                break
+        
+        if dummy_idx != -1:
+            nm = Chem.RWMol(mol)
+            nm.RemoveAtom(dummy_idx)
+            mol = nm.GetMol()
+
+        ranks = list(Chem.CanonicalRankAtoms(mol, breakTies=False))
+        return len(set(ranks))
 
     @staticmethod
     def modify_atom(current_mol: Chem.Mol, atom_id: int, new_element: str) -> Chem.Mol:

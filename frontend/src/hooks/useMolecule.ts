@@ -20,13 +20,19 @@ export const useMolecule = () => {
 
     // Load initial molecule
     const loadInitial = async () => {
+        setStatus("LOADING");
         try {
             const data = await moleculeApi.getInitial();
             setMolecule(data);
+            if (data.mol_block) {
+                setOriginalMolfile(data.mol_block);
+            }
+            setStatus("IDLE");
             return data;
         } catch (e) {
             console.error("Failed to load molecule", e);
             setError("Failed to load initial molecule.");
+            setStatus("IDLE");
             return null;
         }
     };
@@ -50,8 +56,8 @@ export const useMolecule = () => {
 
             const currentMolecule: VisualMolecule = {
                 molecule_id: String(molecule?.molecule_id || "temp"),
-                atoms: [],
-                bonds: [],
+                atoms: molecule?.atoms || [],
+                bonds: molecule?.bonds || [],
                 mol_block: molBlockString
             };
 

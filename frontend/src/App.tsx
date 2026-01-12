@@ -30,31 +30,32 @@ function App() {
 
     const ketcherRef = useRef<KetcherEditorRef>(null);
 
-    // Poll for selection changes to track them before they're cleared
+    // Poll for selection to track last selection
     useEffect(() => {
         const interval = setInterval(() => {
             const current = ketcherRef.current?.getSelectedAtoms() || [];
             if (current.length > 0) {
                 setLastSelection(current);
-                // Log what's selected to help debug
-                console.log("Current selection:", current);
             }
         }, 200);
-        return () => clearInterval(interval);
+
+        return () => {
+            clearInterval(interval);
+        };
     }, []);
 
     useEffect(() => {
         const init = async () => {
             const data = await loadInitial();
-            // Log the VERY first compound if we don't have history yet
             if (data) {
-                // We only auto-log if history is empty to avoid double-logging on refresh
-                // But users might want it always. Let's check entries length.
-                // Actually, entries is from hook.
+                // Log the starting material in history
+                addToClipboard(data, 'accepted');
             }
         };
         init();
     }, []);
+
+    const isFirstLoad = !molecule && status === 'LOADING';
 
     // Watch for initial molecule to log it specifically as "Starting Material"
     useEffect(() => {
@@ -134,7 +135,7 @@ function App() {
                 addToClipboard(molecule, 'accepted');
             }
             ketcherRef.current.setMolecule(molBlock);
-            ketcherRef.current.layout(); // Auto-clean layout on accept
+            // Note: layout() call removed to preserve molecule orientation
         }
     };
 
@@ -162,9 +163,20 @@ function App() {
             {/* Main Stage (Flex-1) */}
             <div className="flex-1 relative h-full bg-gray-50 flex flex-col">
                 <div className="flex-1 relative">
+                    {/* Full page loader for first visit */}
+                    {isFirstLoad && (
+                        <div className="absolute inset-0 bg-white z-[100] flex flex-col items-center justify-center p-8 transition-opacity duration-500">
+                            <div className="w-16 h-16 border-4 border-chemist-primary border-t-transparent rounded-full animate-spin mb-6"></div>
+                            <h2 className="text-2xl font-bold text-gray-800 mb-2">Chemist AI</h2>
+                            <p className="text-gray-500 font-medium">Reconstructing lead compounds...</p>
+                        </div>
+                    )}
+
                     <KetcherEditor
                         ref={ketcherRef}
                         molecule={molecule}
+                        lastSelection={lastSelection}
+                        onInit={() => console.log("Ketcher Ready")}
                     />
 
                     {/* Diff Controls (Floating over editor) */}
