@@ -68,17 +68,9 @@ class ChemistryTools:
     def _generate_coords_preserving_structure(final_mol: Chem.Mol, reference_mol: Chem.Mol):
         """
         Generates 2D coordinates for final_mol while attempting to keep atoms from reference_mol fixed.
+        Note: orientation, scale and translation are matched later by rigid_align
         """
-        try:
-            if reference_mol.GetNumConformers() > 0:
-                # Use the reference coordinates to anchor the layout
-                AllChem.GenerateDepictionMatching2DStructure(final_mol, reference_mol, acceptFailure=True)
-            else:
-                AllChem.Compute2DCoords(final_mol)
-        except Exception as e:
-            # Fallback if matching fails
-            # print(f"Warning: Failed to preserve layout: {e}")
-            AllChem.Compute2DCoords(final_mol)
+        AllChem.Compute2DCoords(final_mol)
 
     @staticmethod
     def _get_fragment_and_attachment(smiles_or_name: str, variant_idx: int = 0) -> tuple[Chem.Mol, int]:

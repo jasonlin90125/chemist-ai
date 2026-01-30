@@ -263,11 +263,13 @@ def rigid_align(original_mol: Chem.Mol, new_mol: Chem.Mol) -> bool:
     cx_n, cy_n = get_centroid(new_mol, match_new)
 
     # 2. Scale & Rotation (Simplified Procrustes/Kabsch in 2D)
-    # Solve for s, theta:  r_orig = s * R(theta) * r_new
-    # We use complex numbers approach: (x+iy)_orig = (s*e^itheta) * (x+iy)_new
+    # We check two paths: Pure Rotation and Reflection+Rotation
+    # Solve for T:  r_orig = T(r_new)
     
-    num = 0j
+    num_rot = 0j
+    num_refl = 0j
     den = 0j
+    
     for i in range(len(match_orig)):
         po = conf_orig.GetAtomPosition(match_orig[i])
         pn = conf_new.GetAtomPosition(match_new[i])
@@ -275,21 +277,27 @@ def rigid_align(original_mol: Chem.Mol, new_mol: Chem.Mol) -> bool:
         zo = complex(po.x - cx_o, po.y - cy_o)
         zn = complex(pn.x - cx_n, pn.y - cy_n)
         
-        num += zo * zn.conjugate()
+        # Path 1: Rotation only (zo ~ T * zn)
+        num_rot += zo * zn.conjugate()
+        # Path 2: Reflection + Rotation (zo ~ T * zn*)
+        num_refl += zo * zn
+        
         den += zn * zn.conjugate()
 
     if abs(den) < 1e-6:
         return False
 
-    # Transformation T = num / den
-    t_complex = num / den
+    # Pick the path with higher correlation magnitude
+    is_reflection = abs(num_refl) > abs(num_rot)
+    t_complex = (num_refl / den) if is_reflection else (num_rot / den)
+    
     scale = abs(t_complex)
-    angle = 0 # Default if scale is 0
+    angle = 0
     import math
     if scale > 1e-6:
         angle = math.atan2(t_complex.imag, t_complex.real)
 
-    print(f"DEBUG: RigidAlign Scale={scale:.2f}, Angle={math.degrees(angle):.1f}°")
+    print(f"DEBUG: RigidAlign Scale={scale:.2f}, Angle={math.degrees(angle):.1f}°, Reflection={is_reflection}")
 
     # 3. Apply Transformation
     cos_a = math.cos(angle)
@@ -297,11 +305,17 @@ def rigid_align(original_mol: Chem.Mol, new_mol: Chem.Mol) -> bool:
     
     for i in range(new_mol.GetNumAtoms()):
         p = conf_new.GetAtomPosition(i)
-        # 1. Translate to origin (relative to new centroid)
+        # Translate to origin
         nx, ny = p.x - cx_n, p.y - cy_n
+        
+        # Apply reflection if needed (flip Y before rotation)
+        if is_reflection:
+            ny = -ny
+            
         # 2. Scale and Rotate
         rx = scale * (nx * cos_a - ny * sin_a)
         ry = scale * (nx * sin_a + ny * cos_a)
+        
         # 3. Translate to original centroid
         conf_new.SetAtomPosition(i, (rx + cx_o, ry + cy_o, 0.0))
 
