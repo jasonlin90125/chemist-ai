@@ -563,12 +563,18 @@ async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]
     seen_smiles = set()
     first_error = None
     
-    # 2. Determine variant count to avoid excessive looping
-    max_variants = 1
-    if action == "add_substructure":
-        max_variants = ChemistryTools.get_variants_count(params["fragment"])
-    elif action == "replace_substructure":
-        max_variants = ChemistryTools.get_variants_count(params["fragment"])
+    # Optimize by pre-calculating variants once
+    try:
+        if action in ["add_substructure", "replace_substructure"]:
+            frag_mol, unique_indices, dummy_idx = ChemistryTools.precalculate_variants(params["fragment"])
+            max_variants = len(unique_indices)
+        else:
+            max_variants = 1
+            frag_mol = None
+            unique_indices = []
+            dummy_idx = None
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     # Try up to max_variants (limit to 12 for sanity)
     limit = min(max_variants, 12)
@@ -576,9 +582,23 @@ async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]
         try:
             new_mol = None
             if action == "add_substructure":
-                new_mol = ChemistryTools.add_substructure(current_mol, anchor_id, params["fragment"], variant_idx=v_idx)
+                # Determine attachment index based on variant logic
+                attach_idx = -1
+                if v_idx == 0 and dummy_idx is not None:
+                    attach_idx = dummy_idx
+                else:
+                    attach_idx = unique_indices[v_idx % len(unique_indices)]
+
+                new_mol = ChemistryTools.add_substructure_fast(current_mol, anchor_id, frag_mol, attach_idx)
             
             elif action == "replace_substructure":
+                # Determine attachment index based on variant logic
+                attach_idx = -1
+                if v_idx == 0 and dummy_idx is not None:
+                    attach_idx = dummy_idx
+                else:
+                    attach_idx = unique_indices[v_idx % len(unique_indices)]
+
                 atom_ids = []
                 if request.selected_maps:
                     for m in request.selected_maps:
@@ -590,7 +610,7 @@ async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]
                         if idx is not None: atom_ids.append(idx)
 
                 if not atom_ids: break
-                new_mol = ChemistryTools.replace_substructure(current_mol, atom_ids, params["fragment"], variant_idx=v_idx)
+                new_mol = ChemistryTools.replace_substructure_fast(current_mol, atom_ids, frag_mol, attach_idx)
             
             else:
                 # Other actions don't support variants yet
