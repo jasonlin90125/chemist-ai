@@ -256,8 +256,12 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
             messages=messages,
             tools=TOOLS_SCHEMA,
             tool_choice="auto",
-            max_tokens=2048  # Limit to prevent credit exhaustion
+            max_tokens=2048
         )
+
+        if not response or not response.choices:
+            print(f"ERROR: No choices in API response: {response}")
+            raise HTTPException(status_code=502, detail="AI Service returned an empty response. Please try again.")
 
         ai_msg = response.choices[0].message
         messages.append(ai_msg)
