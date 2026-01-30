@@ -271,24 +271,8 @@ async def process_molecule_edit(request: EditRequest) -> VisualMolecule:
         print(f"Turn {turn}: {len(tool_calls)} tool call(s)")
 
         for tool_call in tool_calls:
-            # If tool_call is a Mock object (during testing), name might be a PropertyMock or just a string
             # In real usage, it's an object with .function.name
             fn_name = tool_call.function.name
-
-            # Fix for testing with mocks where name is a Mock object
-            if hasattr(fn_name, '_mock_name'):
-                 # It's a mock, we expect it to return the string name we set in the test
-                 # But we set name="find_substructure" in the constructor of MagicMock.
-                 # Actually, tool_call.function.name should be the string if we set it right.
-                 pass
-
-            # The issue in tests is that `tool_call.function.name` returns a MagicMock object because
-            # we constructed it as MagicMock(function=MagicMock(name="find_substructure")).
-            # Accessing .name on a MagicMock returns another MagicMock unless configured otherwise.
-            # To fix this in the application code is ugly, better to fix the test.
-            # But let's see what string conversion does.
-            if not isinstance(fn_name, str):
-                 fn_name = str(fn_name)
 
             print(f"DEBUG: Processing tool call: {fn_name}")
             args = json.loads(tool_call.function.arguments)
