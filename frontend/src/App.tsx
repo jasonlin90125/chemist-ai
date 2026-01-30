@@ -87,7 +87,12 @@ function App() {
             return atom?.atom_map;
         }).filter(m => m !== undefined && m !== null) as number[];
 
+        console.log("Selection IDs:", selectedIds);
         console.log("Selection Maps:", selectedMaps);
+
+        if (selectedMaps.length === 0 && selectedIds.length > 0) {
+            console.log("WARNING: No atom maps found for selection. Backend will use raw indices.");
+        }
 
         let liveMolfile = null;
         try {
@@ -98,7 +103,10 @@ function App() {
             console.error("Error fetching live molecule data:", e);
         }
 
-        const result = await requestEdit(prompt, selectedIds, liveMolfile, selectedMaps);
+        const selectedCoords = ketcherRef.current?.getAtomsCoords(selectedIds) || [];
+        console.log("Selection Coords:", selectedCoords);
+
+        const result = await requestEdit(prompt, selectedIds, liveMolfile, selectedMaps, selectedCoords);
 
         // Clear selection after use
         setLastSelection([]);

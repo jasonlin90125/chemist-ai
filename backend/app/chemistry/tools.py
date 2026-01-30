@@ -9,21 +9,60 @@ from typing import Optional, Union, List, Tuple
 
 class ChemistryTools:
     @staticmethod
-    def _resolve_atom_idx(mol: Chem.Mol, provided_id: int, look_for_map: bool = True) -> Optional[int]:
+    def _resolve_atom_idx(mol: Chem.Mol, provided_id: int, look_for_map: bool = True, coords: Optional[dict] = None) -> Optional[int]:
         """
         Resolves an atom ID to its current RDKit index.
         If look_for_map is True, treats provided_id as a Persistent Map Number.
         Otherwise, treats it as a direct index and validates range.
+        If coords is provided, finds the geometrically closest atom.
         """
         if look_for_map:
             for atom in mol.GetAtoms():
                 if atom.GetAtomMapNum() == provided_id:
                     return atom.GetIdx()
             return None
-        else:
-            if provided_id is not None and provided_id >= 0 and provided_id < mol.GetNumAtoms():
-                return provided_id
-            return None
+        
+        # If we have coordinates, they are the most robust way to find the atom
+        if coords:
+            conf = mol.GetConformer()
+            
+            # Strategy 1: Find best match among normal and Y-flipped coordinates
+            best_idx = None
+            min_dist = float('inf')
+            
+            cx, cy = coords['x'], coords['y']
+            
+            for atom in mol.GetAtoms():
+                idx = atom.GetIdx()
+                pos = conf.GetAtomPosition(idx)
+                
+                # Try normal
+                dist_norm = ((pos.x - cx)**2 + (pos.y - cy)**2)**0.5
+                # Try Y-flipped (Ketcher/SVG often inverts Y)
+                dist_flip = ((pos.x - cx)**2 + (pos.y - (-cy))**2)**0.5
+                
+                d = min(dist_norm, dist_flip)
+                if d < min_dist:
+                    min_dist = d
+                    best_idx = idx
+            
+            # If we found a match within a reasonable distance (2.0Å is safe for atomic distances)
+            # or if it's the only atom we've got, trust the nearest neighbor.
+            if best_idx is not None and min_dist < 2.0:
+                print(f"DEBUG: Resolved atom via coords: dist={min_dist:.3f}, idx={best_idx}")
+                return best_idx
+            
+            # Final fallback: if min_dist is still high, it might be a massive offset.
+            # But if the user only selected one atom, and we have a molecule, 
+            # the closest atom is mathematically the best guess.
+            if best_idx is not None:
+                print(f"DEBUG: Falling back to absolute nearest atom: dist={min_dist:.3f}, idx={best_idx}")
+                return best_idx
+
+        # Fallback to direct index
+        if provided_id is not None and provided_id >= 0 and provided_id < mol.GetNumAtoms():
+            return provided_id
+        return None
 
     @staticmethod
     def _generate_coords_preserving_structure(final_mol: Chem.Mol, reference_mol: Chem.Mol):

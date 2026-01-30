@@ -31,6 +31,7 @@ export interface EditRequest {
     user_prompt: string;
     selected_indices: number[];
     selected_maps: number[];
+    selected_coords?: { x: number, y: number }[];
 }
 
 export interface SimpleEditRequest {
@@ -38,5 +39,6 @@ export interface SimpleEditRequest {
     current_molecule: VisualMolecule;
     selected_indices: number[];
     selected_maps: number[];
+    selected_coords?: { x: number, y: number }[];
     parameters: Record<string, any>;
 }

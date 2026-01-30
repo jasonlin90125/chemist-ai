@@ -31,10 +31,12 @@ class EditRequest(BaseModel):
     user_prompt: str
     selected_indices: List[int]
     selected_maps: List[int] = []
+    selected_coords: Optional[List[dict]] = None
 
 class SimpleEditRequest(BaseModel):
     action: str  # e.g., "add_substructure", "remove_atoms"
     current_molecule: VisualMolecule
     selected_indices: List[int]
     selected_maps: List[int] = []
+    selected_coords: Optional[List[dict]] = None
     parameters: dict

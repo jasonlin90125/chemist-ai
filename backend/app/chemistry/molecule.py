@@ -118,6 +118,22 @@ class VisualMoleculeBuilder:
         if not mol:
              return VisualMoleculeBuilder.visual_json_to_mol(visual_mol)
 
+        # IMPORTANT: Check for degenerate coordinates (common after paste)
+        # If all atoms are at (0,0), we need to compute a layout
+        conf = mol.GetConformer()
+        is_degenerate = True
+        for i in range(mol.GetNumAtoms()):
+            pos = conf.GetAtomPosition(i)
+            if abs(pos.x) > 0.01 or abs(pos.y) > 0.01:
+                is_degenerate = False
+                break
+        
+        if is_degenerate:
+            # Clear existing degenerate conformer and compute fresh ones
+            AllChem.Compute2DCoords(mol)
+            # Fresh conformer after layout
+            conf = mol.GetConformer()
+
         # Build a lookup of (rounded_x, rounded_y) -> map_num from the persistent data
         # We use a small epsilon for coordinate matching
         coord_map = {}
@@ -128,6 +144,7 @@ class VisualMoleculeBuilder:
                 coord_map[key] = atom_data.atom_map
 
         # Apply maps to the new RDKit molecule founded on geometry
+        # Re-fetch conf in case it was recomputed
         conf = mol.GetConformer()
         for atom in mol.GetAtoms():
             # If map is already there (e.g. from V3000 AAM), keep it but still check for consistency

@@ -421,14 +421,15 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
     Directly execute tools without LLM interpretation.
     Designed for buttons or high-confidence UI actions.
     """
+    action = request.action
+    params = request.parameters
+    
     # Reconstruction from visual JSON + mol_block
     current_mol = VisualMoleculeBuilder.reconstruct_molecule(request.current_molecule)
     if not current_mol:
         raise ValueError("Failed to reconstruct molecule")
+    
 
-    new_mol = current_mol
-    action = request.action
-    params = request.parameters
     
     try:
         if action == "add_substructure":
@@ -437,9 +438,16 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
             if request.selected_maps:
                 anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_maps[0], look_for_map=True)
 
-            # Fallback to indices if map resolution failed (e.g. stale maps after paste)
+            # Fallback 1: Use coordinates if available
+            if anchor_id is None and request.selected_coords:
+                anchor_id = ChemistryTools._resolve_atom_idx(current_mol, None, look_for_map=False, coords=request.selected_coords[0])
+
+            # Fallback 2: Use matching index directly if in range
             if anchor_id is None and request.selected_indices:
-                anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_indices[0], look_for_map=False)
+                raw_idx = request.selected_indices[0]
+                if 0 <= raw_idx < current_mol.GetNumAtoms():
+                    anchor_id = raw_idx
+                    print(f"DEBUG: Using raw index {raw_idx} as anchor (no map/coords available)")
                 
             if anchor_id is None:
                 raise ValueError("No anchor atom specified for add_substructure. Please select an atom.")
@@ -476,8 +484,14 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
             if request.selected_maps:
                 atom_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_maps[0], look_for_map=True)
 
+            if atom_id is None and request.selected_coords:
+                 atom_id = ChemistryTools._resolve_atom_idx(current_mol, None, look_for_map=False, coords=request.selected_coords[0])
+
             if atom_id is None and request.selected_indices:
-                atom_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_indices[0], look_for_map=False)
+                raw_idx = request.selected_indices[0]
+                if 0 <= raw_idx < current_mol.GetNumAtoms():
+                    atom_id = raw_idx
+                    print(f"DEBUG: Using raw index {raw_idx} as anchor (no map/coords available)")
             
             if atom_id is None:
                 # Check parameters as fallback
@@ -532,13 +546,22 @@ async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]
     Directly execute tools but for ALL unique symmetry variants.
     Used for pre-calculating options for the user.
     """
+    action = request.action
+    params = request.parameters
+    
     # Reconstruction from visual JSON + mol_block
     current_mol = VisualMoleculeBuilder.reconstruct_molecule(request.current_molecule)
     if not current_mol:
         raise HTTPException(status_code=400, detail="Failed to reconstruct molecule")
 
-    action = request.action
-    params = request.parameters
+    print(f"DEBUG: Reconstructed mol atoms count: {current_mol.GetNumAtoms()}")
+    print(f"DEBUG: selected_indices: {request.selected_indices}")
+    print(f"DEBUG: selected_maps: {request.selected_maps}")
+    print(f"DEBUG: selected_coords: {request.selected_coords}")
+    if current_mol.GetNumAtoms() > 0:
+        p0 = current_mol.GetConformer().GetAtomPosition(0)
+        print(f"DEBUG: Mol Atom 0 coords: ({p0.x:.3f}, {p0.y:.3f})")
+
     
     # Resolve anchor using selected_maps FIRST for robustness
     anchor_id = None
@@ -546,8 +569,14 @@ async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]
         if request.selected_maps:
              anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_maps[0], look_for_map=True)
 
+        if anchor_id is None and request.selected_coords:
+             anchor_id = ChemistryTools._resolve_atom_idx(current_mol, None, look_for_map=False, coords=request.selected_coords[0])
+
         if anchor_id is None and request.selected_indices:
-             anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_indices[0], look_for_map=False)
+             raw_idx = request.selected_indices[0]
+             if 0 <= raw_idx < current_mol.GetNumAtoms():
+                 anchor_id = raw_idx
+                 print(f"DEBUG: Using raw index {raw_idx} as multi-edit anchor (no map/coords available)")
         
         if anchor_id is None:
             raise HTTPException(status_code=400, detail="No anchor atom found. Please select an atom again.")

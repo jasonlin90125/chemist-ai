@@ -41,7 +41,7 @@ export const useMolecule = () => {
         setSelectedIndices(indices);
     };
 
-    const requestEdit = async (prompt: string, manualIndices?: number[], liveMolfile?: string | null, selectedMaps: number[] = []) => {
+    const requestEdit = async (prompt: string, manualIndices?: number[], liveMolfile?: string | null, selectedMaps: number[] = [], selectedCoords: { x: number, y: number }[] = []) => {
         setStatus("LOADING");
         setError(null);
         setProposals([]);
@@ -75,6 +75,7 @@ export const useMolecule = () => {
                     current_molecule: currentMolecule,
                     selected_indices: [...finalIndices],
                     selected_maps: [...selectedMaps],
+                    selected_coords: [...selectedCoords],
                     parameters: { fragment }
                 });
             } else if (p === "remove" || p === "delete") {
@@ -84,6 +85,7 @@ export const useMolecule = () => {
                     current_molecule: currentMolecule,
                     selected_indices: [...finalIndices],
                     selected_maps: [...selectedMaps],
+                    selected_coords: [...selectedCoords],
                     parameters: {}
                 });
                 results = [single];
@@ -104,7 +106,8 @@ export const useMolecule = () => {
                     current_molecule: currentMolecule,
                     user_prompt: prompt,
                     selected_indices: [...finalIndices],
-                    selected_maps: [...selectedMaps]
+                    selected_maps: [...selectedMaps],
+                    selected_coords: [...selectedCoords]
                 });
                 results = [single];
             }

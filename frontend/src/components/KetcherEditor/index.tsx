@@ -28,6 +28,7 @@ export interface KetcherEditorRef {
     getSmiles: () => Promise<string | null>;
     setMolecule: (molBlock: string) => void;
     layout: () => void;
+    getAtomsCoords: (ids: number[]) => { x: number, y: number }[];
 }
 
 interface KetcherEditorProps {
@@ -78,6 +79,23 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
                 if (ketcherRef.current) {
                     ketcherRef.current.layout();
                 }
+            },
+            getAtomsCoords: (ids: number[]) => {
+                if (!ketcherRef.current) return [];
+                const coords: { x: number, y: number }[] = [];
+                try {
+                    // Access Ketcher's internal render objects
+                    const ctab = (ketcherRef.current as any).editor.render.ctab;
+                    for (const id of ids) {
+                        const atom = ctab.atoms.get(id);
+                        if (atom && atom.a && atom.a.pp) {
+                            coords.push({ x: atom.a.pp.x, y: atom.a.pp.y });
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to get atom coordinates:", e);
+                }
+                return coords;
             }
         }));
 
