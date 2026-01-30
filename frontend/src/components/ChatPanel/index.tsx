@@ -1,8 +1,9 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Send, Sparkles, AlertCircle, MessageSquare, History, Trash2, RotateCcw, CheckCircle2, XCircle, Bot, User, Zap } from 'lucide-react';
 import { ClipboardEntry } from '../../types/clipboard';
 import { Message } from '../../types/chat';
 import clsx from 'clsx';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 
 interface ChatPanelProps {
     onSendPrompt: (prompt: string) => void;
@@ -29,14 +30,7 @@ export const ChatPanel = ({
     onClear?: () => void
 }) => {
     const [input, setInput] = useState("");
-    const scrollRef = useRef<HTMLDivElement>(null);
-
-    // Auto-scroll to bottom
-    useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
-    }, [messages, isLoading]);
+    const virtuosoRef = useRef<VirtuosoHandle>(null);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -83,92 +77,107 @@ export const ChatPanel = ({
             <div className="flex-1 overflow-hidden flex flex-col">
                 {activeTab === 'chat' ? (
                     <div className="flex-1 flex flex-col overflow-hidden">
-                        <div
-                            ref={scrollRef}
-                            className="flex-1 p-4 overflow-y-auto space-y-6 bg-gray-50/30 custom-scrollbar"
-                        >
-                            {/* Welcome Note */}
-                            {messages.length === 0 && (
-                                <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl text-sm text-gray-700 shadow-sm">
-                                    <div className="flex items-center gap-2 text-blue-900 font-bold mb-2">
-                                        <Zap className="w-4 h-4" />
-                                        <span>Ready for Design</span>
-                                    </div>
-                                    <p className="leading-relaxed">Describe a modification or select atoms to begin. I'll pre-calculate symmetry variants for you instantly.</p>
-                                    <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
-                                        <span className="px-2 py-1 bg-white border border-blue-200 rounded-lg text-blue-600 font-semibold">"Add furan"</span>
-                                        <span className="px-2 py-1 bg-white border border-blue-200 rounded-lg text-blue-600 font-semibold">"Replace with pyridine"</span>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Message History */}
-                            {messages.map((msg) => (
-                                <div
-                                    key={msg.id}
-                                    className={clsx(
-                                        "flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300",
-                                        msg.role === 'user' ? "items-end" : "items-start"
-                                    )}
-                                >
-                                    <div className="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">
-                                        {msg.role === 'user' ? (
-                                            <><span>You</span><User className="w-3 h-3" /></>
-                                        ) : (
-                                            <><Bot className="w-3 h-3" /><span>Chemist.ai</span></>
-                                        )}
-                                    </div>
-
-                                    {msg.type === 'edit' ? (
-                                        <div className="w-full flex items-center gap-3 bg-white border border-gray-100 p-4 rounded-2xl shadow-sm border-l-4 border-l-blue-500 animate-in zoom-in-95 duration-300">
-                                            <div className="bg-blue-50 p-2.5 rounded-xl">
-                                                <Zap className="w-5 h-5 text-blue-600" />
-                                            </div>
-                                            <div className="flex-1">
-                                                <div className="text-sm font-bold text-gray-800 leading-tight mb-0.5">{msg.metadata?.action || "Edit Applied"}</div>
-                                                <div className="text-[11px] text-gray-500 font-medium">
-                                                    Explored {msg.metadata?.proposalCount || 0} unique structural variants
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ) : (
+                        <div className="flex-1 bg-gray-50/30 overflow-hidden">
+                            <Virtuoso
+                                ref={virtuosoRef}
+                                style={{ height: '100%' }}
+                                className="custom-scrollbar"
+                                data={messages}
+                                initialTopMostItemIndex={messages.length - 1}
+                                followOutput="smooth"
+                                itemContent={(_, msg) => (
+                                    <div className="px-4 py-3">
                                         <div
+                                            key={msg.id}
                                             className={clsx(
-                                                "max-w-[90%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm transition-all",
-                                                msg.role === 'user'
-                                                    ? "bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-tr-none font-medium"
-                                                    : "bg-white border border-gray-100 text-gray-800 rounded-tl-none"
+                                                "flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300",
+                                                msg.role === 'user' ? "items-end" : "items-start"
                                             )}
                                         >
-                                            {msg.content}
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
+                                            <div className="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">
+                                                {msg.role === 'user' ? (
+                                                    <><span>You</span><User className="w-3 h-3" /></>
+                                                ) : (
+                                                    <><Bot className="w-3 h-3" /><span>Chemist.ai</span></>
+                                                )}
+                                            </div>
 
-                            {/* Current Error */}
-                            {error && (
-                                <div className="bg-red-50 border border-red-100 p-3 rounded-xl text-xs text-red-700 flex items-start gap-2 animate-in pulse duration-1000">
-                                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                                    <p className="font-medium">{error}</p>
-                                </div>
-                            )}
-
-                            {/* Thinking State */}
-                            {isLoading && (
-                                <div className="flex flex-col gap-2 items-start animate-in fade-in duration-300">
-                                    <div className="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">
-                                        <Bot className="w-3 h-3" /><span>Chemist.ai</span>
-                                    </div>
-                                    <div className="bg-white border border-gray-100 px-4 py-3 rounded-2xl shadow-sm rounded-tl-none flex items-center gap-2">
-                                        <div className="flex gap-1">
-                                            <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce"></div>
-                                            <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]"></div>
-                                            <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+                                            {msg.type === 'edit' ? (
+                                                <div className="w-full flex items-center gap-3 bg-white border border-gray-100 p-4 rounded-2xl shadow-sm border-l-4 border-l-blue-500 animate-in zoom-in-95 duration-300">
+                                                    <div className="bg-blue-50 p-2.5 rounded-xl">
+                                                        <Zap className="w-5 h-5 text-blue-600" />
+                                                    </div>
+                                                    <div className="flex-1">
+                                                        <div className="text-sm font-bold text-gray-800 leading-tight mb-0.5">{msg.metadata?.action || "Edit Applied"}</div>
+                                                        <div className="text-[11px] text-gray-500 font-medium">
+                                                            Explored {msg.metadata?.proposalCount || 0} unique structural variants
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div
+                                                    className={clsx(
+                                                        "max-w-[90%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm transition-all",
+                                                        msg.role === 'user'
+                                                            ? "bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-tr-none font-medium"
+                                                            : "bg-white border border-gray-100 text-gray-800 rounded-tl-none"
+                                                    )}
+                                                >
+                                                    {msg.content}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
-                                </div>
-                            )}
+                                )}
+                                components={{
+                                    Header: () => (
+                                        <>
+                                            {/* Top padding equivalent */}
+                                            <div className="pt-4" />
+                                            {messages.length === 0 && (
+                                                <div className="px-4 pb-6">
+                                                    <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl text-sm text-gray-700 shadow-sm">
+                                                        <div className="flex items-center gap-2 text-blue-900 font-bold mb-2">
+                                                            <Zap className="w-4 h-4" />
+                                                            <span>Ready for Design</span>
+                                                        </div>
+                                                        <p className="leading-relaxed">Describe a modification or select atoms to begin. I'll pre-calculate symmetry variants for you instantly.</p>
+                                                        <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                                                            <span className="px-2 py-1 bg-white border border-blue-200 rounded-lg text-blue-600 font-semibold">"Add furan"</span>
+                                                            <span className="px-2 py-1 bg-white border border-blue-200 rounded-lg text-blue-600 font-semibold">"Replace with pyridine"</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </>
+                                    ),
+                                    Footer: () => (
+                                        <div className="px-4 pb-4">
+                                            {error && (
+                                                <div className="bg-red-50 border border-red-100 p-3 rounded-xl text-xs text-red-700 flex items-start gap-2 animate-in pulse duration-1000 mb-2">
+                                                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                                                    <p className="font-medium">{error}</p>
+                                                </div>
+                                            )}
+
+                                            {isLoading && (
+                                                <div className="flex flex-col gap-2 items-start animate-in fade-in duration-300">
+                                                    <div className="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">
+                                                        <Bot className="w-3 h-3" /><span>Chemist.ai</span>
+                                                    </div>
+                                                    <div className="bg-white border border-gray-100 px-4 py-3 rounded-2xl shadow-sm rounded-tl-none flex items-center gap-2">
+                                                        <div className="flex gap-1">
+                                                            <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce"></div>
+                                                            <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                                                            <div className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )
+                                }}
+                            />
                         </div>
 
                         {/* Input (Only in Chat) */}
