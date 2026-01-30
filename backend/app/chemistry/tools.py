@@ -26,6 +26,22 @@ class ChemistryTools:
             return None
 
     @staticmethod
+    def _generate_coords_preserving_structure(final_mol: Chem.Mol, reference_mol: Chem.Mol):
+        """
+        Generates 2D coordinates for final_mol while attempting to keep atoms from reference_mol fixed.
+        """
+        try:
+            if reference_mol.GetNumConformers() > 0:
+                # Use the reference coordinates to anchor the layout
+                AllChem.GenerateDepictionMatching2DStructure(final_mol, reference_mol, acceptFailure=True)
+            else:
+                AllChem.Compute2DCoords(final_mol)
+        except Exception as e:
+            # Fallback if matching fails
+            # print(f"Warning: Failed to preserve layout: {e}")
+            AllChem.Compute2DCoords(final_mol)
+
+    @staticmethod
     def _get_fragment_and_attachment(smiles_or_name: str, variant_idx: int = 0) -> tuple[Chem.Mol, int]:
         """
         Helper to get RDKit mol and the index of the atom to attach.
@@ -206,7 +222,6 @@ class ChemistryTools:
         anchor_atom = rw_mol.GetAtomWithIdx(anchor_atom_id)
         
         # Update property cache to get accurate H count
-        # Update property cache to get accurate H count
         rw_mol.UpdatePropertyCache(strict=False)
         
         # Since we added Hs, we only check explicit neighbors
@@ -242,7 +257,10 @@ class ChemistryTools:
             Chem.SanitizeMol(rw_mol)
             # Remove explicit Hs (clean up)
             final_mol = Chem.RemoveHs(rw_mol.GetMol())
-            AllChem.Compute2DCoords(final_mol)
+
+            # IMPROVED LAYOUT: Try to preserve existing coordinates
+            ChemistryTools._generate_coords_preserving_structure(final_mol, current_mol)
+
         except Exception as e:
             raise ValueError(f"Adding substructure failed: {str(e)}")
 
@@ -306,11 +324,22 @@ class ChemistryTools:
         try:
             rw_mol.UpdatePropertyCache(strict=False)
             Chem.SanitizeMol(rw_mol)
-            AllChem.Compute2DCoords(rw_mol)
+
+            final_mol = rw_mol.GetMol()
+
+            # Prepare template: existing molecule minus removed atoms
+            template_mol = Chem.RWMol(current_mol)
+            # RemoveAtom re-indexes, so reverse order is crucial
+            for atom_id in sorted_ids:
+                if atom_id < template_mol.GetNumAtoms():
+                    template_mol.RemoveAtom(atom_id)
+
+            ChemistryTools._generate_coords_preserving_structure(final_mol, template_mol.GetMol())
+
+            return final_mol
+
         except Exception as e:
             raise ValueError(f"Replacing substructure failed: {str(e)}")
-
-        return rw_mol.GetMol()
 
     @staticmethod
     def precalculate_variants(smiles_or_name: str) -> Tuple[Chem.Mol, List[int], Optional[int]]:
@@ -428,7 +457,10 @@ class ChemistryTools:
             Chem.SanitizeMol(rw_mol)
             # Remove explicit Hs (clean up)
             final_mol = Chem.RemoveHs(rw_mol.GetMol())
-            AllChem.Compute2DCoords(final_mol)
+
+            # IMPROVED LAYOUT
+            ChemistryTools._generate_coords_preserving_structure(final_mol, current_mol)
+
         except Exception as e:
             raise ValueError(f"Adding substructure failed: {str(e)}")
 
@@ -496,11 +528,21 @@ class ChemistryTools:
         try:
             rw_mol.UpdatePropertyCache(strict=False)
             Chem.SanitizeMol(rw_mol)
-            AllChem.Compute2DCoords(rw_mol)
+
+            final_mol = rw_mol.GetMol()
+
+            # Prepare template
+            template_mol = Chem.RWMol(current_mol)
+            for atom_id in sorted_ids:
+                if atom_id < template_mol.GetNumAtoms():
+                    template_mol.RemoveAtom(atom_id)
+
+            ChemistryTools._generate_coords_preserving_structure(final_mol, template_mol.GetMol())
+
+            return final_mol
+
         except Exception as e:
             raise ValueError(f"Replacing substructure failed: {str(e)}")
-
-        return rw_mol.GetMol()
 
 
     @staticmethod
