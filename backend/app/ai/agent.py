@@ -436,7 +436,9 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
             anchor_id = None
             if request.selected_maps:
                 anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_maps[0], look_for_map=True)
-            elif request.selected_indices:
+
+            # Fallback to indices if map resolution failed (e.g. stale maps after paste)
+            if anchor_id is None and request.selected_indices:
                 anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_indices[0], look_for_map=False)
                 
             if anchor_id is None:
@@ -451,11 +453,14 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
                 for m in request.selected_maps:
                     idx = ChemistryTools._resolve_atom_idx(current_mol, m, look_for_map=True)
                     if idx is not None: resolved_indices.append(idx)
-            elif request.selected_indices:
+
+            # Fallback to indices if no map indices were resolved
+            if not resolved_indices and request.selected_indices:
                 for i in request.selected_indices:
                     idx = ChemistryTools._resolve_atom_idx(current_mol, i, look_for_map=False)
                     if idx is not None: resolved_indices.append(idx)
-            else:
+
+            if not resolved_indices:
                 p_ids = params.get("atom_ids")
                 if p_ids:
                     for pid in p_ids:
@@ -470,7 +475,8 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
             atom_id = None
             if request.selected_maps:
                 atom_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_maps[0], look_for_map=True)
-            elif request.selected_indices:
+
+            if atom_id is None and request.selected_indices:
                 atom_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_indices[0], look_for_map=False)
             
             if atom_id is None:
@@ -489,11 +495,13 @@ async def process_simple_edit(request: SimpleEditRequest) -> VisualMolecule:
                 for m in request.selected_maps:
                     idx = ChemistryTools._resolve_atom_idx(current_mol, m, look_for_map=True)
                     if idx is not None: resolved_indices.append(idx)
-            elif request.selected_indices:
+
+            if not resolved_indices and request.selected_indices:
                 for i in request.selected_indices:
                     idx = ChemistryTools._resolve_atom_idx(current_mol, i, look_for_map=False)
                     if idx is not None: resolved_indices.append(idx)
-            else:
+
+            if not resolved_indices:
                 p_ids = params.get("atom_ids")
                 if p_ids:
                     for pid in p_ids:
@@ -537,7 +545,8 @@ async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]
     if action == "add_substructure":
         if request.selected_maps:
              anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_maps[0], look_for_map=True)
-        elif request.selected_indices:
+
+        if anchor_id is None and request.selected_indices:
              anchor_id = ChemistryTools._resolve_atom_idx(current_mol, request.selected_indices[0], look_for_map=False)
         
         if anchor_id is None:
@@ -588,7 +597,8 @@ async def process_multi_edit(request: SimpleEditRequest) -> list[VisualMolecule]
                     for m in request.selected_maps:
                         idx = ChemistryTools._resolve_atom_idx(current_mol, m, look_for_map=True)
                         if idx is not None: atom_ids.append(idx)
-                elif request.selected_indices:
+
+                if not atom_ids and request.selected_indices:
                     for i in request.selected_indices:
                         idx = ChemistryTools._resolve_atom_idx(current_mol, i, look_for_map=False)
                         if idx is not None: atom_ids.append(idx)
