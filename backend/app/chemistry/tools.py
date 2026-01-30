@@ -225,25 +225,15 @@ class ChemistryTools:
             if h_to_remove < anchor_atom_id:
                 anchor_atom_id -= 1
             
-        # Add fragment atoms
-        frag_idx_map = {}
-        for atom in fragment.GetAtoms():
-            new_idx = rw_mol.AddAtom(atom)
-            frag_idx_map[atom.GetIdx()] = new_idx
-            
-        # Add fragment bonds
-        for bond in fragment.GetBonds():
-            rw_mol.AddBond(
-                frag_idx_map[bond.GetBeginAtomIdx()],
-                frag_idx_map[bond.GetEndAtomIdx()],
-                bond.GetBondType()
-            )
+        # Add fragment
+        new_atoms_start_idx = rw_mol.GetNumAtoms()
+        rw_mol.InsertMol(fragment)
             
         # Connect fragment to anchor
         if frag_attach_idx != -1:
             rw_mol.AddBond(
                 anchor_atom_id,
-                frag_idx_map[frag_attach_idx],
+                new_atoms_start_idx + frag_attach_idx,
                 Chem.BondType.SINGLE
             )
             
@@ -304,21 +294,12 @@ class ChemistryTools:
         if not fragment:
             raise ValueError(f"Failed to parse or find fragment: {smiles_fragment}")
             
-        frag_idx_map = {}
-        for atom in fragment.GetAtoms():
-            new_idx = rw_mol.AddAtom(atom)
-            frag_idx_map[atom.GetIdx()] = new_idx
-
-        for bond in fragment.GetBonds():
-            rw_mol.AddBond(
-                frag_idx_map[bond.GetBeginAtomIdx()],
-                frag_idx_map[bond.GetEndAtomIdx()],
-                bond.GetBondType()
-            )
+        new_atoms_start_idx = rw_mol.GetNumAtoms()
+        rw_mol.InsertMol(fragment)
 
         # 5. Reconnect adjusted boundary connections to the new fragment's attachment index
         if frag_attach_idx != -1:
-            new_frag_attach_idx = frag_idx_map[frag_attach_idx]
+            new_frag_attach_idx = new_atoms_start_idx + frag_attach_idx
             for n_idx, b_type in adjusted_connections:
                 rw_mol.AddBond(n_idx, new_frag_attach_idx, b_type)
 
