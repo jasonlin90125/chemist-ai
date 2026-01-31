@@ -4,11 +4,14 @@ import { ChatPanel } from './components/ChatPanel';
 import { DiffActionBar } from './components/DiffActionBar';
 import { useMolecule } from './hooks/useMolecule';
 import { useClipboard } from './hooks/useClipboard';
+import { useApothecary } from './hooks/useApothecary';
+import { useToast, ToastContainer } from './hooks/useToast';
 import { ClipboardEntry } from './types/clipboard';
 import { Message } from './types/chat';
 import { v4 as uuidv4 } from 'uuid';
 
 function App() {
+    const { toasts, showToast, removeToast } = useToast();
     const {
         molecule,
         status,
@@ -24,7 +27,17 @@ function App() {
     } = useMolecule();
 
     const { entries, addToClipboard, clearClipboard } = useClipboard();
-    const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
+    const {
+        entries: apothecaryEntries,
+        addToApothecary,
+        removeFromApothecary,
+        clearApothecary,
+        exportToCSV,
+        exportToSMI,
+        exportToSDF
+    } = useApothecary(showToast);
+
+    const [activeTab, setActiveTab] = useState<'chat' | 'history' | 'apothecary'>('chat');
     const [messages, setMessages] = useState<Message[]>([]);
     const [lastSelection, setLastSelection] = useState<number[]>([]);
 
@@ -147,6 +160,19 @@ function App() {
         }
     };
 
+    const handleAcceptAndAdd = () => {
+        if (molecule) {
+            addToApothecary(molecule);
+        }
+        handleAccept();
+    };
+
+    const handleAddToApothecary = () => {
+        if (molecule) {
+            addToApothecary(molecule);
+        }
+    };
+
     const handleReject = () => {
         const currentProposal = molecule;
         const revertTo = rejectChange();
@@ -185,12 +211,14 @@ function App() {
                         molecule={molecule}
                         lastSelection={lastSelection}
                         onInit={() => console.log("Ketcher Ready")}
+                        onAddToApothecary={handleAddToApothecary}
                     />
 
                     {/* Diff Controls (Floating over editor) */}
                     {status === 'DIFFING' && (
                         <DiffActionBar
                             onAccept={handleAccept}
+                            onAcceptAndAdd={handleAcceptAndAdd}
                             onReject={handleReject}
                             onCycle={cycleVariant}
                             proposalsCount={proposalsCount}
@@ -218,9 +246,15 @@ function App() {
                 messages={messages}
                 entries={entries}
                 onRevert={handleRevert}
-                onClear={clearClipboard}
+                onClear={activeTab === 'apothecary' ? clearApothecary : clearClipboard}
+                apothecaryEntries={apothecaryEntries}
+                onRemoveFromApothecary={removeFromApothecary}
+                onExportCSV={exportToCSV}
+                onExportSDF={exportToSDF}
+                onExportSMI={exportToSMI}
             />
 
+            <ToastContainer toasts={toasts} removeToast={removeToast} />
         </div>
     );
 }

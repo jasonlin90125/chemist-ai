@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { Send, Sparkles, AlertCircle, MessageSquare, History, Trash2, RotateCcw, CheckCircle2, XCircle, Bot, User, Zap } from 'lucide-react';
+import { Send, Sparkles, AlertCircle, MessageSquare, History, Trash2, RotateCcw, CheckCircle2, XCircle, Bot, User, Zap, FlaskConical, X, FileSpreadsheet, FileJson, FileText } from 'lucide-react';
 import { ClipboardEntry } from '../../types/clipboard';
 import { Message } from '../../types/chat';
+import { ApothecaryEntry } from '../../types/apothecary';
 import clsx from 'clsx';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 
@@ -9,8 +10,8 @@ interface ChatPanelProps {
     onSendPrompt: (prompt: string) => void;
     isLoading: boolean;
     error?: string | null;
-    activeTab: 'chat' | 'history';
-    onTabChange: (tab: 'chat' | 'history') => void;
+    activeTab: 'chat' | 'history' | 'apothecary';
+    onTabChange: (tab: 'chat' | 'history' | 'apothecary') => void;
     messages: Message[];
 }
 
@@ -23,11 +24,21 @@ export const ChatPanel = ({
     messages,
     entries = [],
     onRevert,
-    onClear
+    onClear,
+    apothecaryEntries = [],
+    onRemoveFromApothecary,
+    onExportCSV,
+    onExportSDF,
+    onExportSMI
 }: ChatPanelProps & {
     entries?: ClipboardEntry[],
     onRevert?: (entry: ClipboardEntry) => void,
-    onClear?: () => void
+    onClear?: () => void,
+    apothecaryEntries?: ApothecaryEntry[],
+    onRemoveFromApothecary?: (id: string) => void,
+    onExportCSV?: () => void,
+    onExportSDF?: () => void,
+    onExportSMI?: () => void
 }) => {
     const [input, setInput] = useState("");
     const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -61,6 +72,16 @@ export const ChatPanel = ({
                         Chat
                     </button>
                     <button
+                        onClick={() => onTabChange('apothecary')}
+                        className={clsx(
+                            "pb-2 text-sm font-medium transition-all border-b-2 flex items-center gap-2",
+                            activeTab === 'apothecary' ? "border-blue-500 text-blue-600" : "border-transparent text-gray-400 hover:text-gray-600"
+                        )}
+                    >
+                        <FlaskConical className="w-4 h-4" />
+                        Apothecary
+                    </button>
+                    <button
                         onClick={() => onTabChange('history')}
                         className={clsx(
                             "pb-2 text-sm font-medium transition-all border-b-2 flex items-center gap-2",
@@ -77,6 +98,8 @@ export const ChatPanel = ({
             <div className="flex-1 overflow-hidden flex flex-col">
                 {activeTab === 'chat' ? (
                     <div className="flex-1 flex flex-col overflow-hidden">
+                        {/* Existing Chat Content... */}
+                        {/* (No changes to chat implementation logic, just wrapping) */}
                         <div className="flex-1 bg-gray-50/30 overflow-hidden">
                             <Virtuoso
                                 ref={virtuosoRef}
@@ -203,6 +226,86 @@ export const ChatPanel = ({
                                 </button>
                             </form>
                         </div>
+                    </div>
+                ) : activeTab === 'apothecary' ? (
+                    <div className="flex-1 flex flex-col overflow-hidden bg-gray-50/30">
+                        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                            {apothecaryEntries.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center text-gray-400 py-10">
+                                    <FlaskConical className="w-12 h-12 mb-3 opacity-20" />
+                                    <p className="text-sm">No molecules saved yet</p>
+                                </div>
+                            ) : (
+                                apothecaryEntries.map((e) => (
+                                    <div
+                                        key={e.id}
+                                        className="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md transition-all group shadow-sm relative overflow-hidden"
+                                    >
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-blue-600 text-[11px] font-bold tracking-tight bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                                                {e.id}
+                                            </span>
+                                            <button
+                                                onClick={() => onRemoveFromApothecary?.(e.id)}
+                                                className="p-1 px-1.5 rounded-md hover:bg-red-50 text-gray-300 hover:text-red-500 transition-all"
+                                                title="Delete from Apothecary"
+                                            >
+                                                <X className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+
+                                        {e.svg ? (
+                                            <div
+                                                className="bg-gray-50 rounded-lg p-2 mb-2 border border-gray-100 flex justify-center items-center h-32 overflow-hidden"
+                                                dangerouslySetInnerHTML={{ __html: e.svg }}
+                                            />
+                                        ) : (
+                                            <div className="bg-gray-50 rounded-lg p-2 mb-2 font-mono text-[10px] text-gray-600 truncate select-all border border-gray-100">
+                                                {e.smiles}
+                                            </div>
+                                        )}
+
+                                        <div className="text-[10px] text-gray-400 font-medium">
+                                            Saved {new Date(e.timestamp).toLocaleDateString()}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                        {apothecaryEntries.length > 0 && (
+                            <div className="p-4 border-t border-gray-200 bg-white space-y-2">
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button
+                                        onClick={onExportCSV}
+                                        className="flex flex-col items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-100 hover:border-blue-200 hover:bg-blue-50/50 transition-all text-gray-600 hover:text-blue-600"
+                                    >
+                                        <FileSpreadsheet className="w-4 h-4" />
+                                        <span className="text-[10px] font-bold uppercase tracking-tight">CSV</span>
+                                    </button>
+                                    <button
+                                        onClick={onExportSDF}
+                                        className="flex flex-col items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-100 hover:border-blue-200 hover:bg-blue-50/50 transition-all text-gray-600 hover:text-blue-600"
+                                    >
+                                        <FileJson className="w-4 h-4" />
+                                        <span className="text-[10px] font-bold uppercase tracking-tight">SDF</span>
+                                    </button>
+                                    <button
+                                        onClick={onExportSMI}
+                                        className="flex flex-col items-center justify-center gap-1.5 py-2.5 rounded-xl border border-gray-100 hover:border-blue-200 hover:bg-blue-50/50 transition-all text-gray-600 hover:text-blue-600"
+                                    >
+                                        <FileText className="w-4 h-4" />
+                                        <span className="text-[10px] font-bold uppercase tracking-tight">SMI</span>
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={onClear}
+                                    className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all text-[11px] font-bold uppercase tracking-wider"
+                                >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    Purge Apothecary
+                                </button>
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div className="flex-1 flex flex-col overflow-hidden bg-gray-50/30">

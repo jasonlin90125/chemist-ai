@@ -95,12 +95,21 @@ class VisualMoleculeBuilder:
         except:
             svg = None
             
+        # Generate plain SMILES without map numbers for the UI/Export
+        try:
+            smiles_mol = Chem.Mol(mol)
+            for a in smiles_mol.GetAtoms():
+                a.SetAtomMapNum(0)
+            smiles = Chem.MolToSmiles(smiles_mol)
+        except:
+            smiles = "Unknown SMILES"
+
         return VisualMolecule(
             molecule_id=mol_id,
             atoms=atoms,
             bonds=bonds,
             mol_block=mol_block,
-            smiles=Chem.MolToSmiles(mol),
+            smiles=smiles,
             svg=svg
         )
 

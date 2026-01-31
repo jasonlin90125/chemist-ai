@@ -1,8 +1,9 @@
-import { Check, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Check, X, ChevronLeft, ChevronRight, FlaskConical } from 'lucide-react';
 import { useEffect } from 'react';
 
 interface DiffActionBarProps {
     onAccept: () => void;
+    onAcceptAndAdd?: () => void;
     onReject: () => void;
     onCycle: (direction: number) => void;
     proposalsCount?: number;
@@ -11,6 +12,7 @@ interface DiffActionBarProps {
 
 export const DiffActionBar = ({
     onAccept,
+    onAcceptAndAdd,
     onReject,
     onCycle,
     proposalsCount = 0,
@@ -69,11 +71,22 @@ export const DiffActionBar = ({
 
             <button
                 onClick={onAccept}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-chemist-success/20 text-chemist-success transition-colors text-sm font-semibold"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-chemist-success/20 text-chemist-success transition-colors text-sm font-semibold whitespace-nowrap"
             >
                 <Check className="w-4 h-4" />
                 Accept
             </button>
+
+            {onAcceptAndAdd && (
+                <button
+                    onClick={onAcceptAndAdd}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-chemist-primary/20 text-chemist-primary transition-colors text-sm font-semibold whitespace-nowrap"
+                    title="Accept this structure and save to Apothecary"
+                >
+                    <FlaskConical className="w-4 h-4" />
+                    Accept & Add
+                </button>
+            )}
         </div>
     );
 };

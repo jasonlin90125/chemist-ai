@@ -24,5 +24,10 @@ export const moleculeApi = {
     multiEdit: async (req: SimpleEditRequest): Promise<VisualMolecule[]> => {
         const res = await api.post('/molecule/multi-edit', req);
         return res.data;
+    },
+
+    exportSDF: async (molecules: { mol_block: string, id: string }[]): Promise<Blob> => {
+        const res = await api.post('/export/sdf', molecules, { responseType: 'blob' });
+        return res.data;
     }
 };

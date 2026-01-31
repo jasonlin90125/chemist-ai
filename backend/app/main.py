@@ -4,6 +4,9 @@ from app.models import VisualMolecule, EditRequest, SimpleEditRequest
 from app.chemistry.molecule import get_ibrutinib
 from app.ai.agent import process_molecule_edit, process_simple_edit, process_multi_edit
 import os
+import io
+from fastapi.responses import StreamingResponse
+from rdkit import Chem
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,6 +52,40 @@ async def simple_edit_molecule(request: SimpleEditRequest):
     without involving the LLM or images.
     """
     return await process_simple_edit(request)
+
+@app.post("/api/export/sdf")
+async def export_sdf(molecules: list[dict]):
+    """
+    Combines a list of molecules into a single SDF file.
+    Expects [{"mol_block": "...", "id": "..."}]
+    """
+    try:
+        output = io.StringIO()
+        writer = Chem.SDWriter(output)
+        
+        for mol_data in molecules:
+            mol_block = mol_data.get("mol_block")
+            mol_id = mol_data.get("id")
+            
+            if mol_block:
+                # Ketcher often provides V3000, ensure RDKit handles it
+                mol = Chem.MolFromMolBlock(mol_block, removeHs=False)
+                if mol:
+                    mol.SetProp("_Name", str(mol_id))
+                    writer.write(mol)
+        
+        writer.close()
+        
+        # Convert string output to bytes for the response
+        sdf_data = output.getvalue().encode('utf-8')
+        return StreamingResponse(
+            io.BytesIO(sdf_data),
+            media_type="chemical/x-mdl-sdfile",
+            headers={"Content-Disposition": "attachment; filename=apothecary.sdf"}
+        )
+    except Exception as e:
+        print(f"SDF Export Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

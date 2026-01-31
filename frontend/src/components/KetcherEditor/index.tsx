@@ -3,6 +3,7 @@ import { Editor } from 'ketcher-react';
 import { StandaloneStructServiceProvider } from 'ketcher-standalone';
 import 'ketcher-react/dist/index.css';
 import { VisualMolecule } from '../../types/molecule';
+import { FlaskConical } from 'lucide-react';
 
 // Define the Ketcher interface
 interface Ketcher {
@@ -35,12 +36,13 @@ interface KetcherEditorProps {
     molecule: VisualMolecule | null;
     lastSelection?: number[];
     onInit?: (ketcher: Ketcher) => void;
+    onAddToApothecary?: () => void;
 }
 
 const structServiceProvider = new StandaloneStructServiceProvider();
 
 export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
-    ({ molecule, lastSelection = [], onInit }, ref) => {
+    ({ molecule, lastSelection = [], onInit, onAddToApothecary }, ref) => {
         const [ketcherInstance, setKetcherInstance] = useState<Ketcher | null>(null);
         const ketcherRef = useRef<Ketcher | null>(null);
         const lastMoleculeId = useRef<string | null>(null);
@@ -278,6 +280,18 @@ export const KetcherEditor = forwardRef<KetcherEditorRef, KetcherEditorProps>(
                     onInit={handleInit}
                     errorHandler={(err) => console.error(err)}
                 />
+
+                {/* Floating Add to Apothecary Button */}
+                {onAddToApothecary && (
+                    <button
+                        onClick={onAddToApothecary}
+                        className="absolute bottom-6 right-6 bg-white border border-gray-200 shadow-lg hover:shadow-xl hover:border-blue-200 hover:bg-blue-50 text-blue-600 p-3 rounded-2xl flex items-center gap-2 transition-all group z-30 active:scale-95"
+                        title="Add current structure to Apothecary"
+                    >
+                        <FlaskConical className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                        <span className="text-sm font-bold pr-1">Add to Apothecary</span>
+                    </button>
+                )}
             </div>
         );
     }
