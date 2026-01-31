@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { KetcherEditor, KetcherEditorRef } from './components/KetcherEditor';
 import { ChatPanel } from './components/ChatPanel';
 import { DiffActionBar } from './components/DiffActionBar';
+import { moleculeApi } from './api/client';
 import { useMolecule } from './hooks/useMolecule';
 import { useClipboard } from './hooks/useClipboard';
 import { useApothecary } from './hooks/useApothecary';
@@ -160,16 +161,34 @@ function App() {
         }
     };
 
-    const handleAcceptAndAdd = () => {
-        if (molecule) {
-            addToApothecary(molecule);
+    const handleAcceptAndAdd = async () => {
+        if (ketcherRef.current) {
+            const molBlock = await ketcherRef.current.getMolfile();
+            if (molBlock) {
+                try {
+                    const viz = await moleculeApi.visualize(molBlock);
+                    addToApothecary(viz);
+                } catch (e) {
+                    console.error("Failed to standardize molecule for Apothecary:", e);
+                    // Fallback to literal molecule if backend fails
+                    if (molecule) addToApothecary(molecule);
+                }
+            }
         }
         handleAccept();
     };
 
-    const handleAddToApothecary = () => {
-        if (molecule) {
-            addToApothecary(molecule);
+    const handleAddToApothecary = async () => {
+        if (ketcherRef.current) {
+            const molBlock = await ketcherRef.current.getMolfile();
+            if (molBlock) {
+                try {
+                    const viz = await moleculeApi.visualize(molBlock);
+                    addToApothecary(viz);
+                } catch (e) {
+                    console.error("Failed to standardize molecule for Apothecary:", e);
+                }
+            }
         }
     };
 

@@ -26,6 +26,11 @@ export const moleculeApi = {
         return res.data;
     },
 
+    visualize: async (mol_block: string): Promise<VisualMolecule> => {
+        const res = await api.post('/molecule/visualize', { mol_block });
+        return res.data;
+    },
+
     exportSDF: async (molecules: { mol_block: string, id: string }[]): Promise<Blob> => {
         const res = await api.post('/export/sdf', molecules, { responseType: 'blob' });
         return res.data;

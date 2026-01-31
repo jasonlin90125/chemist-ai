@@ -37,6 +37,28 @@ def get_initial_molecule():
     """Returns the Ibrutinib molecule to start the session."""
     return get_ibrutinib()
 
+@app.post("/api/molecule/visualize", response_model=VisualMolecule)
+async def visualize_molecule(request: dict):
+    """
+    Standardizes a mol_block and returns full metadata (SVG, SMILES, etc.)
+    """
+    from app.chemistry.molecule import VisualMoleculeBuilder
+    from rdkit import Chem
+    
+    mol_block = request.get("mol_block")
+    if not mol_block:
+        raise HTTPException(status_code=400, detail="mol_block is required")
+    
+    mol = Chem.MolFromMolBlock(mol_block, removeHs=False)
+    if not mol:
+        # Try SMILES if mol_block fails (unlikely from Ketcher but good fallback)
+        mol = Chem.MolFromSmiles(mol_block)
+        
+    if not mol:
+        raise HTTPException(status_code=400, detail="Invalid molecule data")
+        
+    return VisualMoleculeBuilder.mol_to_visual_json(mol)
+
 @app.post("/api/molecule/edit", response_model=VisualMolecule)
 async def edit_molecule(request: EditRequest):
     """
